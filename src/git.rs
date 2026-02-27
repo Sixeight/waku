@@ -31,10 +31,11 @@ fn parse_git_output(output: &std::process::Output, args: &[&str]) -> Result<Stri
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Read all git config entries matching a POSIX regexp pattern in one call.
-pub fn config_get_regexp(pattern: &str) -> Result<Vec<(String, String)>> {
+/// Read all git config entries matching a POSIX regexp pattern in a specific directory.
+pub fn config_get_regexp_in(dir: &Path, pattern: &str) -> Result<Vec<(String, String)>> {
     let output = Command::new("git")
         .args(["config", "--get-regexp", pattern])
+        .current_dir(dir)
         .output()
         .with_context(|| format!("failed to execute: git config --get-regexp {pattern}"))?;
     if !output.status.success() {
@@ -48,6 +49,11 @@ pub fn config_get_regexp(pattern: &str) -> Result<Vec<(String, String)>> {
             Some((key.to_string(), value.to_string()))
         })
         .collect())
+}
+
+/// Read all git config entries matching a POSIX regexp pattern in one call.
+pub fn config_get_regexp(pattern: &str) -> Result<Vec<(String, String)>> {
+    config_get_regexp_in(&std::env::current_dir()?, pattern)
 }
 
 /// Load the first-parent commit hashes of `ref_name` into a HashSet.

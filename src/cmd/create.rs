@@ -1,6 +1,6 @@
 use std::fs;
 use std::os::unix::fs as unix_fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -11,24 +11,36 @@ use super::{
 };
 use crate::{git, worktree};
 
-pub fn run(branch: &str, ai: bool, editor: bool, from: Option<&str>) -> Result<()> {
-    let root = worktree::repo_root()?;
+#[derive(Default)]
+pub struct CreateOptions {
+    pub ai: bool,
+    pub editor: bool,
+    pub from: Option<String>,
+    pub quiet: bool,
+    pub root: Option<PathBuf>,
+}
+
+pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
+    let root = match opts.root {
+        Some(ref r) => r.clone(),
+        None => worktree::repo_root()?,
+    };
     let wt_path = worktree::worktree_path(&root, branch)?;
 
-    create_worktree(&wt_path, branch, from)?;
+    create_worktree(&root, &wt_path, branch, opts.from.as_deref(), opts.quiet)?;
 
-    let waku_config = git::config_get_regexp(r"^waku\.")?;
+    let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
 
-    create_symlinks(&root, &wt_path, &waku_config)?;
-    create_copies(&root, &wt_path, &waku_config)?;
-    process_worktreeinclude(&root, &wt_path, &waku_config)?;
-    run_post_create_hooks(&wt_path, &waku_config)?;
+    create_symlinks(&root, &wt_path, &waku_config, opts.quiet)?;
+    create_copies(&root, &wt_path, &waku_config, opts.quiet)?;
+    process_worktreeinclude(&root, &wt_path, &waku_config, opts.quiet)?;
+    run_post_create_hooks(&wt_path, &waku_config, opts.quiet)?;
 
-    if ai {
+    if opts.ai {
         git::exec_command("claude", &[], &wt_path)?;
-    } else if editor {
+    } else if opts.editor {
         git::exec_command("nvim", &[], &wt_path)?;
-    } else {
+    } else if !opts.quiet {
         eprintln!();
         eprintln!(
             "  {} {}",
@@ -37,22 +49,34 @@ pub fn run(branch: &str, ai: bool, editor: bool, from: Option<&str>) -> Result<(
         );
     }
 
-    Ok(())
+    Ok(wt_path)
 }
 
-fn create_worktree(wt_path: &Path, branch: &str, from: Option<&str>) -> Result<()> {
+fn create_worktree(
+    root: &Path,
+    wt_path: &Path,
+    branch: &str,
+    from: Option<&str>,
+    quiet: bool,
+) -> Result<()> {
     if wt_path.exists() {
-        eprintln!(
-            "  {} Worktree {} already exists",
-            style("●").yellow(),
-            style(branch).bold(),
-        );
+        if !quiet {
+            eprintln!(
+                "  {} Worktree {} already exists",
+                style("●").yellow(),
+                style(branch).bold(),
+            );
+        }
         return Ok(());
     }
 
-    let sp = spinner(format!("Creating worktree {branch}"));
+    let sp = if quiet {
+        None
+    } else {
+        Some(spinner(format!("Creating worktree {branch}")))
+    };
     let base_ref = from.unwrap_or("HEAD");
-    git::git_output(&[
+    git::git_output_in(root, &[
         "worktree",
         "add",
         "-b",
@@ -60,35 +84,53 @@ fn create_worktree(wt_path: &Path, branch: &str, from: Option<&str>) -> Result<(
         &wt_path.to_string_lossy(),
         base_ref,
     ])?;
-    sp.finish_and_clear();
-    eprintln!(
-        "  {} Created worktree {}",
-        style("✔").green().bold(),
-        style(branch).bold(),
-    );
+    if let Some(sp) = sp {
+        sp.finish_and_clear();
+    }
+    if !quiet {
+        eprintln!(
+            "  {} Created worktree {}",
+            style("✔").green().bold(),
+            style(branch).bold(),
+        );
+    }
     Ok(())
 }
 
-fn create_symlinks(root: &Path, wt_path: &Path, config: &[(String, String)]) -> Result<()> {
+fn create_symlinks(
+    root: &Path,
+    wt_path: &Path,
+    config: &[(String, String)],
+    quiet: bool,
+) -> Result<()> {
     let includes = config_values(config, "waku.link.include");
 
     for name in includes {
         let source = root.join(name);
         if !source.exists() {
-            eprintln!(
-                "  {} Link source not found: {}",
-                style("⚠").yellow(),
-                style(source.display()).dim(),
-            );
+            if !quiet {
+                eprintln!(
+                    "  {} Link source not found: {}",
+                    style("⚠").yellow(),
+                    style(source.display()).dim(),
+                );
+            }
             continue;
         }
         link_entry(&source, &wt_path.join(name))?;
-        eprintln!("  {} Linked {}", style("✔").green(), name);
+        if !quiet {
+            eprintln!("  {} Linked {}", style("✔").green(), name);
+        }
     }
     Ok(())
 }
 
-fn create_copies(root: &Path, wt_path: &Path, config: &[(String, String)]) -> Result<()> {
+fn create_copies(
+    root: &Path,
+    wt_path: &Path,
+    config: &[(String, String)],
+    quiet: bool,
+) -> Result<()> {
     let copies = config_values(config, "waku.copy.include");
     let valid: Vec<&str> = copies
         .iter()
@@ -97,11 +139,13 @@ fn create_copies(root: &Path, wt_path: &Path, config: &[(String, String)]) -> Re
             if source.exists() {
                 return true;
             }
-            eprintln!(
-                "  {} Copy source not found: {}",
-                style("⚠").yellow(),
-                style(source.display()).dim(),
-            );
+            if !quiet {
+                eprintln!(
+                    "  {} Copy source not found: {}",
+                    style("⚠").yellow(),
+                    style(source.display()).dim(),
+                );
+            }
             false
         })
         .copied()
@@ -111,7 +155,7 @@ fn create_copies(root: &Path, wt_path: &Path, config: &[(String, String)]) -> Re
         return Ok(());
     }
 
-    copy_entries_parallel(root, wt_path, &valid);
+    copy_entries_parallel(root, wt_path, &valid, quiet);
     Ok(())
 }
 
@@ -119,6 +163,7 @@ fn process_worktreeinclude(
     root: &Path,
     wt_path: &Path,
     config: &[(String, String)],
+    quiet: bool,
 ) -> Result<()> {
     let mode = WorktreeIncludeMode::from_config(config);
     if mode == WorktreeIncludeMode::Ignore {
@@ -133,14 +178,16 @@ fn process_worktreeinclude(
     match mode {
         WorktreeIncludeMode::Copy => {
             let names: Vec<&str> = files.iter().map(|p| p.to_str().unwrap_or_default()).collect();
-            copy_entries_parallel(root, wt_path, &names);
+            copy_entries_parallel(root, wt_path, &names, quiet);
         }
         WorktreeIncludeMode::Link => {
             for rel in &files {
                 let source = root.join(rel);
                 let target = wt_path.join(rel);
                 link_entry(&source, &target)?;
-                eprintln!("  {} Linked {}", style("✔").green(), rel.display());
+                if !quiet {
+                    eprintln!("  {} Linked {}", style("✔").green(), rel.display());
+                }
             }
         }
         WorktreeIncludeMode::Ignore => unreachable!(),
@@ -148,24 +195,32 @@ fn process_worktreeinclude(
     Ok(())
 }
 
-fn run_post_create_hooks(wt_path: &Path, config: &[(String, String)]) -> Result<()> {
+fn run_post_create_hooks(
+    wt_path: &Path,
+    config: &[(String, String)],
+    quiet: bool,
+) -> Result<()> {
     let hooks = config_values(config, "waku.hook.postcreate");
 
     for hook in hooks {
-        eprintln!("  {} Running {}...", style("▸").cyan(), hook);
+        if !quiet {
+            eprintln!("  {} Running {}...", style("▸").cyan(), hook);
+        }
         let status = Command::new("sh")
             .args(["-c", hook])
             .current_dir(wt_path)
             .status()
             .with_context(|| format!("failed to run hook: {hook}"))?;
-        if status.success() {
-            eprintln!("  {} Ran {}", style("✔").green(), hook);
-        } else {
-            eprintln!(
-                "  {} Hook failed: {}",
-                style("✘").red().bold(),
-                style(hook).bold(),
-            );
+        if !quiet {
+            if status.success() {
+                eprintln!("  {} Ran {}", style("✔").green(), hook);
+            } else {
+                eprintln!(
+                    "  {} Hook failed: {}",
+                    style("✘").red().bold(),
+                    style(hook).bold(),
+                );
+            }
         }
     }
     Ok(())
@@ -187,7 +242,7 @@ fn link_entry(source: &Path, target: &Path) -> Result<()> {
 }
 
 /// Copy multiple entries from `root` to `wt_path` in parallel.
-fn copy_entries_parallel(root: &Path, wt_path: &Path, names: &[&str]) {
+fn copy_entries_parallel(root: &Path, wt_path: &Path, names: &[&str], quiet: bool) {
     let results: Vec<(&str, Result<()>)> = std::thread::scope(|s| {
         let handles: Vec<_> = names
             .iter()
@@ -206,15 +261,17 @@ fn copy_entries_parallel(root: &Path, wt_path: &Path, names: &[&str]) {
             .map(|(name, h)| (*name, h.join().unwrap()))
             .collect()
     });
-    for (name, result) in results {
-        match result {
-            Ok(()) => eprintln!("  {} Copied {}", style("✔").green(), name),
-            Err(e) => eprintln!(
-                "  {} Failed to copy {}: {}",
-                style("✘").red().bold(),
-                name,
-                e
-            ),
+    if !quiet {
+        for (name, result) in results {
+            match result {
+                Ok(()) => eprintln!("  {} Copied {}", style("✔").green(), name),
+                Err(e) => eprintln!(
+                    "  {} Failed to copy {}: {}",
+                    style("✘").red().bold(),
+                    name,
+                    e
+                ),
+            }
         }
     }
 }

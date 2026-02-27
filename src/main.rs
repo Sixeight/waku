@@ -94,7 +94,16 @@ fn main() {
             ai,
             editor,
             from,
-        }) => cmd::create::run(&branch, ai, editor, from.as_deref()),
+        }) => cmd::create::run(
+            &branch,
+            cmd::create::CreateOptions {
+                ai,
+                editor,
+                from,
+                ..Default::default()
+            },
+        )
+        .map(|_| ()),
         Some(Command::Open { branch, ai, args }) => cmd::open::run(branch.as_deref(), ai, &args),
         Some(Command::Path { branch }) => cmd::path::run(&branch),
         Some(Command::Remove {

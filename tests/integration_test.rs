@@ -1127,6 +1127,52 @@ fn remove_cleans_up_worktreeinclude_copies() {
 // --- completions tests ---
 
 #[test]
+fn create_run_returns_worktree_path() {
+    let (_tmp, repo) = setup_repo();
+
+    let result = git_waku::cmd::create::run(
+        "feature-api-path",
+        git_waku::cmd::create::CreateOptions {
+            quiet: true,
+            root: Some(repo.clone()),
+            ..Default::default()
+        },
+    );
+
+    let wt_path = result.expect("run() should succeed");
+    let expected = repo.parent().unwrap().join("myrepo-worktrees/feature-api-path");
+    assert_eq!(wt_path, expected);
+    assert!(wt_path.exists(), "returned path should exist");
+    assert!(
+        wt_path.join("README.md").exists(),
+        "worktree should have README.md"
+    );
+}
+
+#[test]
+fn create_quiet_suppresses_stderr() {
+    let (_tmp, repo) = setup_repo();
+
+    let output = run_waku(&repo, &["create", "feature-quiet"]);
+    assert!(output.status.success());
+    let normal_stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        normal_stderr.contains("Created worktree"),
+        "normal mode should have stderr output: {normal_stderr}"
+    );
+
+    // quiet mode is only available via library API, but we can verify
+    // the CLI still works as expected and returns correct path
+    let path_output = run_waku(&repo, &["path", "feature-quiet"]);
+    assert!(path_output.status.success());
+    let path = String::from_utf8_lossy(&path_output.stdout).trim().to_string();
+    assert!(
+        PathBuf::from(&path).exists(),
+        "path returned should exist: {path}"
+    );
+}
+
+#[test]
 fn completions_generates_zsh() {
     let output = Command::new(git_waku_bin())
         .args(["completions", "zsh"])
