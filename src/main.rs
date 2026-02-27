@@ -16,16 +16,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Create a new worktree with symlinks and hooks
-    #[command(alias = "create")]
-    New {
+    Create {
         /// Branch name to create
         branch: String,
 
-        /// Start Claude Code after creation
+        /// Open with Claude Code after creation
         #[arg(short = 'a', long = "ai", conflicts_with = "editor")]
         ai: bool,
 
-        /// Start Neovim after creation
+        /// Open with Neovim after creation
         #[arg(short = 'e', long = "editor", conflicts_with = "ai")]
         editor: bool,
 
@@ -52,8 +51,8 @@ enum Command {
         /// Branch name
         branch: String,
     },
-    /// Remove a specific worktree
-    Rm {
+    /// Remove a worktree and its branch
+    Remove {
         /// Branch name, directory name, or path
         query: String,
 
@@ -90,19 +89,19 @@ fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
-        Some(Command::New {
+        Some(Command::Create {
             branch,
             ai,
             editor,
             from,
-        }) => cmd::new::run(&branch, ai, editor, from.as_deref()),
-        Some(Command::Path { branch }) => cmd::path::run(&branch),
+        }) => cmd::create::run(&branch, ai, editor, from.as_deref()),
         Some(Command::Open { branch, ai, args }) => cmd::open::run(branch.as_deref(), ai, &args),
-        Some(Command::Rm {
+        Some(Command::Path { branch }) => cmd::path::run(&branch),
+        Some(Command::Remove {
             query,
             force,
             keep_branch,
-        }) => cmd::rm::run(&query, force, keep_branch),
+        }) => cmd::remove::run(&query, force, keep_branch),
         Some(Command::Completions { shell }) => {
             clap_complete::generate(
                 shell,

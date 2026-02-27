@@ -1,8 +1,8 @@
 pub mod clean;
-pub mod new;
+pub mod create;
 pub mod open;
 pub mod path;
-pub mod rm;
+pub mod remove;
 
 use std::collections::HashSet;
 use std::env;
