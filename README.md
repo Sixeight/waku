@@ -90,6 +90,15 @@ git waku completions fish
 
 All configuration is done through `git config`.
 
+### Worktree location (`waku.worktrees.path`)
+
+Override where worktrees are created. Default: `{repo}-worktrees/` in the parent directory.
+
+```sh
+git config waku.worktrees.path /tmp/worktrees    # absolute path
+git config waku.worktrees.path ../worktrees       # relative to repo root
+```
+
 ### Symlinks (`waku.link.include`)
 
 Share directories or files from the main worktree into new worktrees via symlinks. Useful for large dependency directories like `node_modules` or `vendor` that you don't want to duplicate.
