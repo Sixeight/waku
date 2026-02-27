@@ -1,6 +1,9 @@
+use std::collections::HashSet;
+use std::path::Path;
+
 use anyhow::{bail, Result};
 
-use super::{cleanup_empty_dirs, print_warning, remove_waku_copies, remove_waku_symlinks, remove_worktreeinclude_files};
+use super::{cleanup_empty_dirs, print_warning, spinner};
 use crate::{git, worktree};
 
 pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
@@ -19,37 +22,72 @@ pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
         .find(|(p, _)| p == &path_str)
         .and_then(|(_, b)| b.clone());
 
-    remove_waku_symlinks(&path)?;
-    remove_waku_copies(&path)?;
-    remove_worktreeinclude_files(&path, &root)?;
+    let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
 
-    // Remove the worktree
-    let mut remove_args = vec!["worktree", "remove"];
-    if force {
-        remove_args.push("--force");
+    // Check for real modifications (waku artifacts like symlinks make
+    // git status noisy, so use diff + ls-files and exclude waku entries)
+    if !force && is_worktree_dirty(&path, &waku_config) {
+        bail!(
+            "'{}' contains modified or untracked files, use --force to delete",
+            path_str
+        );
     }
-    remove_args.push(&path_str);
-    git::git_output_in(&root, &remove_args)?;
+
+    let display = branch.as_deref().unwrap_or(query);
+    let sp = spinner(format!("Removing {display}"));
+
+    // Always pass --force to git because waku artifacts (symlinks, copies)
+    // make the tree appear dirty. Real dirty check is done above.
+    git::git_output_in(&root, &["worktree", "remove", "--force", &path_str])?;
 
     // Delete the branch unless --keep-branch
     if !keep_branch {
         if let Some(ref branch) = branch {
             let delete_flag = if force { "-D" } else { "-d" };
             if let Err(e) = git::git_output_in(&root, &["branch", delete_flag, branch]) {
+                sp.finish_and_clear();
                 print_warning(&format!("failed to delete branch '{branch}'"), &e);
+                return Ok(());
             }
         }
     }
 
     // Clean up empty directories
-    let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
     let base = worktree::worktrees_base_with_config(&root, &waku_config)?;
     if base.exists() {
         cleanup_empty_dirs(&base)?;
     }
 
-    let display = branch.as_deref().unwrap_or(query);
-    println!("Removed: {display}");
+    sp.finish_and_clear();
+    eprintln!(
+        "  {} Removed {}",
+        console::style("✔").green().bold(),
+        console::style(display).bold(),
+    );
 
     Ok(())
+}
+
+/// Check if a worktree has real modifications, ignoring waku artifacts.
+pub fn is_worktree_dirty(path: &Path, config: &[(String, String)]) -> bool {
+    let waku_entries: HashSet<&str> = config
+        .iter()
+        .filter(|(k, _)| k == "waku.link.include" || k == "waku.copy.include")
+        .map(|(_, v)| v.as_str())
+        .collect();
+
+    let tracked = git::git_output_in(path, &["diff", "--name-only", "HEAD"])
+        .unwrap_or_default();
+    let has_tracked_changes = tracked
+        .lines()
+        .any(|line| !waku_entries.iter().any(|e| line == *e || line.starts_with(&format!("{e}/"))));
+
+    let untracked =
+        git::git_output_in(path, &["ls-files", "--others", "--exclude-standard"])
+            .unwrap_or_default();
+    let has_untracked = untracked
+        .lines()
+        .any(|line| !waku_entries.iter().any(|e| line == *e || line.starts_with(&format!("{e}/"))));
+
+    has_tracked_changes || has_untracked
 }

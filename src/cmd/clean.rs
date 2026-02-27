@@ -1,10 +1,7 @@
 use anyhow::Result;
 use console::{style, Key, Term};
 
-use super::{
-    cleanup_empty_dirs, print_warning, remove_waku_copies, remove_waku_symlinks,
-    remove_worktreeinclude_files, spinner,
-};
+use super::{cleanup_empty_dirs, print_warning, spinner};
 use crate::{git, worktree};
 
 pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
@@ -131,61 +128,59 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         chosen
     };
 
-    // Phase 1: Remove symlinks and directories in parallel
-    let sp = spinner("Removing worktrees".into());
-    let results: Vec<(String, String, bool, Option<String>)> = std::thread::scope(|s| {
-        let handles: Vec<_> = selected
-            .iter()
-            .map(|(path, branch)| {
-                let root_ref = &root;
-                s.spawn(move || {
-                    let wt_path = std::path::Path::new(path);
-
-                    // Remove waku symlinks, copies, and worktreeinclude files first
-                    let _ = remove_waku_symlinks(wt_path);
-                    let _ = remove_waku_copies(wt_path);
-                    let _ = remove_worktreeinclude_files(wt_path, root_ref);
-
-                    // Dirty check (non-force only)
-                    if !force {
-                        if let Ok(status) =
-                            git::git_output_in(wt_path, &["status", "--porcelain"])
-                        {
-                            if !status.is_empty() {
-                                return (
-                                    path.clone(),
-                                    branch.clone(),
-                                    false,
-                                    Some(format!(
-                                        "'{path}' contains modified or untracked files, use --force to delete"
-                                    )),
-                                );
-                            }
-                        }
-                    }
-
-                    // Remove directory
-                    match std::fs::remove_dir_all(wt_path) {
-                        Ok(()) => (path.clone(), branch.clone(), true, None),
-                        Err(e) => (
-                            path.clone(),
-                            branch.clone(),
-                            false,
-                            Some(format!("failed to remove directory: {e}")),
-                        ),
-                    }
+    // Phase 1: Dirty check in parallel (waku artifacts like symlinks make
+    // git status noisy, so use diff + ls-files and exclude waku entries)
+    let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
+    let dirty_set: std::collections::HashSet<String> = if force {
+        std::collections::HashSet::new()
+    } else {
+        std::thread::scope(|s| {
+            let handles: Vec<_> = selected
+                .iter()
+                .map(|(path, _)| {
+                    let config_ref = &waku_config;
+                    s.spawn(move || {
+                        let wt_path = std::path::Path::new(path);
+                        (path.clone(), super::remove::is_worktree_dirty(wt_path, config_ref))
+                    })
                 })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap())
-            .collect()
-    });
-    sp.finish_and_clear();
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|h| {
+                    let (path, dirty) = h.join().unwrap();
+                    dirty.then_some(path)
+                })
+                .collect()
+        })
+    };
 
-    // Phase 2: Prune stale worktree entries (single git call)
-    let _ = git::git_output_in(&root, &["worktree", "prune"]);
+    // Phase 2: Remove worktrees sequentially (git worktree remove takes a lock)
+    let sp = spinner("Removing worktrees".into());
+    let mut results: Vec<(String, String, bool, Option<String>)> = Vec::new();
+    for (path, branch) in &selected {
+        if dirty_set.contains(path) {
+            results.push((
+                path.clone(),
+                branch.clone(),
+                false,
+                Some(format!(
+                    "'{path}' contains modified files, use --force to delete"
+                )),
+            ));
+            continue;
+        }
+        match git::git_output_in(&root, &["worktree", "remove", "--force", path]) {
+            Ok(_) => results.push((path.clone(), branch.clone(), true, None)),
+            Err(e) => results.push((
+                path.clone(),
+                branch.clone(),
+                false,
+                Some(format!("failed to remove worktree: {e}")),
+            )),
+        }
+    }
+    sp.finish_and_clear();
 
     // Phase 3: Delete branches and report results
     for (path, branch, success, warning) in &results {
@@ -202,7 +197,6 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     }
 
     // Clean up empty directories in worktrees base
-    let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
     let base = worktree::worktrees_base_with_config(&root, &waku_config)?;
     if base.exists() {
         cleanup_empty_dirs(&base)?;
