@@ -16,6 +16,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Create a new worktree with symlinks and hooks
+    #[command(alias = "new")]
     Create {
         /// Branch name to create
         branch: String,
@@ -33,6 +34,7 @@ enum Command {
         from: Option<String>,
     },
     /// Open a worktree in Neovim or Claude Code
+    #[command(alias = "use")]
     Open {
         /// Branch name (uses current directory if omitted)
         branch: Option<String>,
@@ -52,6 +54,7 @@ enum Command {
         branch: String,
     },
     /// Remove a worktree and its branch
+    #[command(alias = "rm")]
     Remove {
         /// Branch name, directory name, or path
         query: String,
