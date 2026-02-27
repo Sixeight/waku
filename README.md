@@ -126,6 +126,15 @@ git config waku.worktreeinclude link        # create symlinks
 git config waku.worktreeinclude ignore      # do nothing
 ```
 
+### Tool commands (`waku.command.*`)
+
+Override the default commands for `--ai` and `--editor`:
+
+```sh
+git config waku.command.ai claude      # default: claude
+git config waku.command.editor nvim    # default: nvim
+```
+
 ### Post-create hooks (`waku.hook.postCreate`)
 
 Run shell commands after worktree creation:
@@ -134,6 +143,10 @@ Run shell commands after worktree creation:
 git config --add waku.hook.postCreate "cp .env.example .env"
 git config --add waku.hook.postCreate "direnv allow"
 ```
+
+## Acknowledgements
+
+Inspired by [git-worktree-runner](https://github.com/coderabbitai/git-worktree-runner).
 
 ## License
 
