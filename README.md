@@ -19,10 +19,10 @@ Once installed, Git picks it up as `git waku`.
 ### Create a worktree
 
 ```sh
-git waku new my-feature
-git waku new my-feature --from origin/main   # branch from a specific ref
-git waku new my-feature -a                   # create and open with Claude Code
-git waku new my-feature -e                   # create and open with Neovim
+git waku create my-feature
+git waku create my-feature --from origin/main   # branch from a specific ref
+git waku create my-feature --ai                 # create and open with Claude Code
+git waku create my-feature --editor             # create and open with Neovim
 ```
 
 Worktrees are created in a sibling directory named `{repo}-worktrees/`. Slashes in branch names become dashes in directory names:
@@ -54,9 +54,9 @@ git waku open                               # open current directory
 ### Remove a worktree
 
 ```sh
-git waku rm my-feature                      # remove worktree and delete branch
-git waku rm my-feature --keep-branch        # remove worktree, keep branch
-git waku rm my-feature --force              # remove even if dirty
+git waku remove my-feature                      # remove worktree and delete branch
+git waku remove my-feature --keep-branch        # remove worktree, keep branch
+git waku remove my-feature --force              # remove even if dirty
 ```
 
 ### Clean up merged worktrees
@@ -68,7 +68,7 @@ git waku clean --yes                        # skip confirmation
 git waku clean --yes --force                # also remove dirty worktrees
 ```
 
-Detects both regular merges and squash merges. Branches that have not diverged from main (no unique commits) are treated as "not yet started" and skipped. As a side effect, fast-forward merged branches are also skipped — use `git waku rm` to remove them manually.
+Detects both regular merges and squash merges. Branches that have not diverged from main (no unique commits) are treated as "not yet started" and skipped. As a side effect, fast-forward merged branches are also skipped — use `git waku remove` to remove them manually.
 
 ### Passthrough
 
