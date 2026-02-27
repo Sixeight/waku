@@ -241,13 +241,7 @@ pub fn remove_waku_copies(wt_path: &Path) -> Result<()> {
     let includes = git::config_get_regexp(r"^waku\.copy\.include$")?;
     for (_, name) in &includes {
         let target = wt_path.join(name);
-        if target.is_dir() {
-            fs::remove_dir_all(&target)
-                .with_context(|| format!("failed to remove copy: {}", target.display()))?;
-        } else if target.exists() {
-            fs::remove_file(&target)
-                .with_context(|| format!("failed to remove copy: {}", target.display()))?;
-        }
+        remove_existing(&target)?;
     }
     Ok(())
 }
