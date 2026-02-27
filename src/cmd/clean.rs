@@ -202,7 +202,8 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     }
 
     // Clean up empty directories in worktrees base
-    let base = worktree::worktrees_base(&root)?;
+    let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
+    let base = worktree::worktrees_base_with_config(&root, &waku_config)?;
     if base.exists() {
         cleanup_empty_dirs(&base)?;
     }

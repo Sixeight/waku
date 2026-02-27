@@ -46,6 +46,28 @@ pub fn worktree_path(root: &Path, branch: &str) -> Result<PathBuf> {
     Ok(worktrees_base(root)?.join(dir_name))
 }
 
+/// Compute the base directory for worktrees using config override.
+pub fn worktrees_base_with_config(root: &Path, config: &[(String, String)]) -> Result<PathBuf> {
+    if let Some((_, path)) = config.iter().find(|(k, _)| k == "waku.worktrees.path") {
+        let p = PathBuf::from(path);
+        if p.is_absolute() {
+            return Ok(p);
+        }
+        return Ok(root.join(p));
+    }
+    worktrees_base(root)
+}
+
+/// Compute the worktree path using config override.
+pub fn worktree_path_with_config(
+    root: &Path,
+    branch: &str,
+    config: &[(String, String)],
+) -> Result<PathBuf> {
+    let dir_name = branch.replace('/', "-");
+    Ok(worktrees_base_with_config(root, config)?.join(dir_name))
+}
+
 /// Resolve a query to a worktree path.
 /// Accepts: absolute path, branch name, or worktree directory name.
 pub fn resolve_worktree(query: &str) -> Result<PathBuf> {
@@ -79,4 +101,47 @@ pub fn resolve_worktree(query: &str) -> Result<PathBuf> {
     }
 
     bail!("no worktree found for '{query}'")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worktrees_base_default_without_config() {
+        let root = Path::new("/home/user/myrepo");
+        let config: Vec<(String, String)> = vec![];
+        let base = worktrees_base_with_config(root, &config).unwrap();
+        assert_eq!(base, PathBuf::from("/home/user/myrepo-worktrees"));
+    }
+
+    #[test]
+    fn worktrees_base_absolute_path_from_config() {
+        let root = Path::new("/home/user/myrepo");
+        let config = vec![
+            ("waku.worktrees.path".to_string(), "/tmp/worktrees".to_string()),
+        ];
+        let base = worktrees_base_with_config(root, &config).unwrap();
+        assert_eq!(base, PathBuf::from("/tmp/worktrees"));
+    }
+
+    #[test]
+    fn worktrees_base_relative_path_from_config() {
+        let root = Path::new("/home/user/myrepo");
+        let config = vec![
+            ("waku.worktrees.path".to_string(), "../worktrees".to_string()),
+        ];
+        let base = worktrees_base_with_config(root, &config).unwrap();
+        assert_eq!(base, PathBuf::from("/home/user/myrepo/../worktrees"));
+    }
+
+    #[test]
+    fn worktree_path_with_config_uses_custom_base() {
+        let root = Path::new("/home/user/myrepo");
+        let config = vec![
+            ("waku.worktrees.path".to_string(), "/tmp/wt".to_string()),
+        ];
+        let path = worktree_path_with_config(root, "feature/foo", &config).unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/wt/feature-foo"));
+    }
 }

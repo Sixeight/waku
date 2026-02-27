@@ -25,11 +25,10 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
         Some(ref r) => r.clone(),
         None => worktree::repo_root()?,
     };
-    let wt_path = worktree::worktree_path(&root, branch)?;
+    let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
+    let wt_path = worktree::worktree_path_with_config(&root, branch, &waku_config)?;
 
     create_worktree(&root, &wt_path, branch, opts.from.as_deref(), opts.quiet)?;
-
-    let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
 
     create_symlinks(&root, &wt_path, &waku_config, opts.quiet)?;
     create_copies(&root, &wt_path, &waku_config, opts.quiet)?;
