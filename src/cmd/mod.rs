@@ -124,6 +124,19 @@ pub fn print_warning(context: &str, error: &anyhow::Error) {
     );
 }
 
+/// Resolve the command for a tool from waku config, with defaults.
+pub fn resolve_tool(config: &[(String, String)], tool: &str) -> String {
+    let key = format!("waku.command.{tool}");
+    config
+        .iter()
+        .find(|(k, _)| k == &key)
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| match tool {
+            "ai" => "claude".to_string(),
+            _ => "nvim".to_string(),
+        })
+}
+
 /// The mode for handling `.worktreeinclude` entries.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WorktreeIncludeMode {
@@ -290,5 +303,22 @@ mod tests {
         let err = anyhow::anyhow!("git fetch failed: could not resolve host");
         let detail = extract_git_detail(&err);
         assert_eq!(detail, "could not resolve host");
+    }
+
+    #[test]
+    fn resolve_tool_defaults() {
+        let config: Vec<(String, String)> = vec![];
+        assert_eq!(resolve_tool(&config, "ai"), "claude");
+        assert_eq!(resolve_tool(&config, "editor"), "nvim");
+    }
+
+    #[test]
+    fn resolve_tool_from_config() {
+        let config = vec![
+            ("waku.command.ai".to_string(), "aider".to_string()),
+            ("waku.command.editor".to_string(), "vim".to_string()),
+        ];
+        assert_eq!(resolve_tool(&config, "ai"), "aider");
+        assert_eq!(resolve_tool(&config, "editor"), "vim");
     }
 }

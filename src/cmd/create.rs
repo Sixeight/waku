@@ -37,9 +37,11 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     run_post_create_hooks(&wt_path, &waku_config, opts.quiet)?;
 
     if opts.ai {
-        git::exec_command("claude", &[], &wt_path)?;
+        let cmd = super::resolve_tool(&waku_config, "ai");
+        git::exec_command(&cmd, &[], &wt_path)?;
     } else if opts.editor {
-        git::exec_command("nvim", &[], &wt_path)?;
+        let cmd = super::resolve_tool(&waku_config, "editor");
+        git::exec_command(&cmd, &[], &wt_path)?;
     } else if !opts.quiet {
         eprintln!();
         eprintln!(
