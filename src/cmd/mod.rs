@@ -275,4 +275,31 @@ mod tests {
         assert_eq!(resolve_tool(&config, "ai"), "aider");
         assert_eq!(resolve_tool(&config, "editor"), "vim");
     }
+
+    #[test]
+    fn config_values_filters_by_key() {
+        let config = vec![
+            ("waku.link.include".to_string(), "node_modules".to_string()),
+            ("waku.copy.include".to_string(), ".env".to_string()),
+            ("waku.link.include".to_string(), ".direnv".to_string()),
+        ];
+        assert_eq!(config_values(&config, "waku.link.include"), vec!["node_modules", ".direnv"]);
+        assert_eq!(config_values(&config, "waku.copy.include"), vec![".env"]);
+    }
+
+    #[test]
+    fn config_values_returns_empty_for_missing_key() {
+        let config = vec![
+            ("waku.link.include".to_string(), "node_modules".to_string()),
+        ];
+        let result: Vec<&str> = config_values(&config, "waku.copy.include");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn config_values_empty_config() {
+        let config: Vec<(String, String)> = vec![];
+        let result: Vec<&str> = config_values(&config, "waku.link.include");
+        assert!(result.is_empty());
+    }
 }
