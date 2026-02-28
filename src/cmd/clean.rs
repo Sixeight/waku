@@ -103,12 +103,18 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
 
     // Filter out branches that haven't diverged from their fork point.
     // A branch with no unique commits since creation is "not yet started", not "merged".
+    // These unchanged worktrees are still included as candidates but marked separately.
     let first_parents = git::first_parent_commits(&root, &main_branch);
-    let mut to_remove: Vec<(String, Option<String>)> = merged_candidates
-        .into_iter()
-        .filter(|(_, branch)| git::has_branch_diverged(&root, &first_parents, branch))
-        .map(|(path, branch)| (path, Some(branch)))
-        .collect();
+    let mut unchanged_set: HashSet<String> = HashSet::new();
+    let mut to_remove: Vec<(String, Option<String>)> = Vec::new();
+    for (path, branch) in merged_candidates {
+        if git::has_branch_diverged(&root, &first_parents, &branch) {
+            to_remove.push((path, Some(branch)));
+        } else {
+            unchanged_set.insert(path.clone());
+            to_remove.push((path, Some(branch)));
+        }
+    }
 
     // Detached worktrees have no branch — always candidates for removal
     for path in &detached {
@@ -142,7 +148,11 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     };
 
     // Summary of found worktrees
-    let merged_count = to_remove.iter().filter(|(_, b)| b.is_some()).count();
+    let unchanged_count = unchanged_set.len();
+    let merged_count = to_remove
+        .iter()
+        .filter(|(path, b)| b.is_some() && !unchanged_set.contains(path))
+        .count();
     let detached_count = detached.len();
     let mut found_parts = Vec::new();
     if merged_count > 0 {
@@ -151,8 +161,12 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     if detached_count > 0 {
         found_parts.push(format!("{detached_count} detached"));
     }
+    if unchanged_count > 0 {
+        found_parts.push(format!("{unchanged_count} unchanged"));
+    }
     if !found_parts.is_empty() {
-        let wt_word = if merged_count + detached_count == 1 {
+        let total = merged_count + detached_count + unchanged_count;
+        let wt_word = if total == 1 {
             "worktree"
         } else {
             "worktrees"
@@ -172,12 +186,8 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     if dry_run {
         println!("Worktrees to remove:");
         for (path, branch) in &to_remove {
-            let name = display_name(path, branch.as_deref());
-            if dirty_set.contains(path) {
-                println!("  {name} (dirty)");
-            } else {
-                println!("  {name}");
-            }
+            let label = worktree_label(path, branch.as_deref(), &dirty_set, &unchanged_set);
+            println!("  {label}");
         }
         return Ok(());
     }
@@ -199,11 +209,11 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         }
         to_remove
             .iter()
-            .filter(|(path, _)| !dirty_set.contains(path))
+            .filter(|(path, _)| !dirty_set.contains(path) && !unchanged_set.contains(path))
             .cloned()
             .collect()
     } else {
-        let chosen = select_worktrees(&to_remove, &dirty_set)?;
+        let chosen = select_worktrees(&to_remove, &dirty_set, &unchanged_set)?;
         if chosen.is_empty() {
             println!("Aborted.");
             return Ok(());
@@ -250,18 +260,19 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
 fn select_worktrees(
     items: &[(String, Option<String>)],
     dirty_set: &HashSet<String>,
+    unchanged_set: &HashSet<String>,
 ) -> Result<Vec<(String, Option<String>)>> {
     let term = Term::stderr();
     let count = items.len();
     let mut checked: Vec<bool> = items
         .iter()
-        .map(|(path, _)| !dirty_set.contains(path))
+        .map(|(path, _)| !dirty_set.contains(path) && !unchanged_set.contains(path))
         .collect();
     let mut cursor = count;
     let lines = count + 2;
 
     term.hide_cursor()?;
-    draw_selector(&term, items, &checked, dirty_set, cursor);
+    draw_selector(&term, items, &checked, dirty_set, unchanged_set, cursor);
 
     let result = loop {
         match term.read_key()? {
@@ -284,7 +295,7 @@ fn select_worktrees(
             _ => continue,
         }
         term.clear_last_lines(lines)?;
-        draw_selector(&term, items, &checked, dirty_set, cursor);
+        draw_selector(&term, items, &checked, dirty_set, unchanged_set, cursor);
     };
     term.show_cursor()?;
     result
@@ -295,17 +306,12 @@ fn draw_selector(
     items: &[(String, Option<String>)],
     checked: &[bool],
     dirty_set: &HashSet<String>,
+    unchanged_set: &HashSet<String>,
     cursor: usize,
 ) {
     let _ = term.write_line("Worktrees to remove:");
     for (i, (path, branch)) in items.iter().enumerate() {
-        let name = display_name(path, branch.as_deref());
-        let dirty = dirty_set.contains(path);
-        let label = if dirty {
-            format!("{name} (dirty)")
-        } else {
-            name
-        };
+        let label = worktree_label(path, branch.as_deref(), dirty_set, unchanged_set);
         let mark = if checked[i] { "✔" } else { " " };
         if cursor == i {
             let _ = term.write_line(&format!(
@@ -336,6 +342,22 @@ fn display_name(path: &str, branch: Option<&str>) -> String {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string())
     })
+}
+
+fn worktree_label(
+    path: &str,
+    branch: Option<&str>,
+    dirty_set: &HashSet<String>,
+    unchanged_set: &HashSet<String>,
+) -> String {
+    let name = display_name(path, branch);
+    if dirty_set.contains(path) {
+        format!("{name} (dirty)")
+    } else if unchanged_set.contains(path) {
+        format!("{name} (no changes)")
+    } else {
+        name
+    }
 }
 
 fn parse_branch_list(output: &str, exclude: &str) -> Vec<String> {

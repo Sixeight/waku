@@ -464,6 +464,47 @@ fn clean_dry_run_shows_dirty_worktrees() {
 }
 
 #[test]
+fn clean_dry_run_shows_unchanged_worktrees() {
+    let (_tmp, repo) = setup_repo();
+
+    // Create an undiverged worktree (no commits after branch creation)
+    run_waku(&repo, &["create", "feature-unchanged"]);
+
+    let output = run_waku(&repo, &["clean", "--dry-run"]);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("feature-unchanged"),
+        "should show unchanged worktree: {stdout}"
+    );
+    assert!(
+        stdout.contains("(no changes)"),
+        "should mark unchanged worktree with (no changes): {stdout}"
+    );
+}
+
+#[test]
+fn clean_yes_skips_unchanged_worktrees() {
+    let (_tmp, repo) = setup_repo();
+
+    // Create an undiverged worktree (no commits after branch creation)
+    run_waku(&repo, &["create", "feature-unchanged-yes"]);
+
+    let output = run_waku(&repo, &["clean", "--yes"]);
+    assert!(output.status.success());
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-unchanged-yes");
+    assert!(
+        wt_path.exists(),
+        "unchanged worktree should NOT be removed with --yes"
+    );
+}
+
+#[test]
 fn clean_does_not_remove_unmerged() {
     let (_tmp, repo) = setup_repo();
 
