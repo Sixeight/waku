@@ -39,7 +39,11 @@ pub fn config_get_regexp_in(dir: &Path, pattern: &str) -> Result<Vec<(String, St
         .output()
         .with_context(|| format!("failed to execute: git config --get-regexp {pattern}"))?;
     if !output.status.success() {
-        return Ok(vec![]);
+        if output.status.code() == Some(1) {
+            return Ok(vec![]);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git config --get-regexp {pattern} failed: {}", stderr.trim());
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout
