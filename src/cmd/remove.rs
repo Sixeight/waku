@@ -34,18 +34,32 @@ pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
     }
 
     let display = branch.as_deref().unwrap_or(query);
-    let sp = spinner(format!("Removing {display}"));
 
     // Always pass --force to git because waku artifacts (symlinks, copies)
     // make the tree appear dirty. Real dirty check is done above.
+    let sp = spinner("Removing worktree".into());
     git::git_output_in(&root, &["worktree", "remove", "--force", &path_str])?;
+    sp.finish_and_clear();
+    eprintln!(
+        "  {} Removed worktree",
+        console::style("✔").green(),
+    );
 
     // Delete the branch unless --keep-branch
     if !keep_branch {
         if let Some(ref branch) = branch {
             let delete_flag = if force { "-D" } else { "-d" };
-            if let Err(e) = git::git_output_in(&root, &["branch", delete_flag, branch]) {
-                print_warning(&format!("failed to delete branch '{branch}'"), &e);
+            match git::git_output_in(&root, &["branch", delete_flag, branch]) {
+                Ok(_) => {
+                    eprintln!(
+                        "  {} Deleted branch {}",
+                        console::style("✔").green(),
+                        branch,
+                    );
+                }
+                Err(e) => {
+                    print_warning(&format!("failed to delete branch '{branch}'"), &e);
+                }
             }
         }
     }
@@ -56,7 +70,6 @@ pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
         cleanup_empty_dirs(&base)?;
     }
 
-    sp.finish_and_clear();
     eprintln!(
         "  {} Removed {}",
         console::style("✔").green().bold(),
