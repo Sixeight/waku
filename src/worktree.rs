@@ -27,8 +27,8 @@ pub fn repo_root() -> Result<PathBuf> {
     Ok(root.to_path_buf())
 }
 
-/// Compute the base directory for worktrees: `{parent}/{repo-name}-worktrees/`
-pub fn worktrees_base(root: &Path) -> Result<PathBuf> {
+/// Compute the default base directory for worktrees: `{parent}/{repo-name}-worktrees/`
+fn worktrees_base(root: &Path) -> Result<PathBuf> {
     let repo_name = root
         .file_name()
         .with_context(|| format!("cannot get repo name from {}", root.display()))?
@@ -37,13 +37,6 @@ pub fn worktrees_base(root: &Path) -> Result<PathBuf> {
         .parent()
         .with_context(|| format!("cannot get parent of {}", root.display()))?;
     Ok(parent.join(format!("{repo_name}-worktrees")))
-}
-
-/// Compute the worktree path for a given branch name.
-/// Slashes in branch names are replaced with dashes.
-pub fn worktree_path(root: &Path, branch: &str) -> Result<PathBuf> {
-    let dir_name = branch.replace('/', "-");
-    Ok(worktrees_base(root)?.join(dir_name))
 }
 
 /// Compute the base directory for worktrees using config override.
