@@ -51,15 +51,20 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         merged
     });
 
-    // Filter worktrees that need is_merge_noop check
+    // Separate branched and detached worktrees
     let root_str = root.to_string_lossy().to_string();
+    let mut detached: Vec<String> = Vec::new();
     let candidates: Vec<_> = worktrees
         .iter()
+        .filter(|(path, _)| path != &root_str)
         .filter_map(|(path, wt_branch)| {
-            let branch = wt_branch.as_ref()?;
-            if path == &root_str {
-                return None;
-            }
+            let branch = match wt_branch.as_ref() {
+                Some(b) => b,
+                None => {
+                    detached.push(path.clone());
+                    return None;
+                }
+            };
             if merged_branches.iter().any(|b| b == branch) {
                 return Some((path.clone(), branch.clone(), true));
             }
@@ -97,47 +102,25 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
 
     // Filter out branches that haven't diverged from their fork point.
     // A branch with no unique commits since creation is "not yet started", not "merged".
-    // Load main's first-parent chain once, then O(1) lookup per branch.
     let first_parents = git::first_parent_commits(&root, &main_branch);
-    let to_remove: Vec<(String, String)> = merged_candidates
+    let mut to_remove: Vec<(String, Option<String>)> = merged_candidates
         .into_iter()
         .filter(|(_, branch)| git::has_branch_diverged(&root, &first_parents, branch))
+        .map(|(path, branch)| (path, Some(branch)))
         .collect();
 
-    sp.finish_and_clear();
-
-    if to_remove.is_empty() {
-        println!("No merged worktrees to clean.");
-        return Ok(());
+    // Detached worktrees have no branch — always candidates for removal
+    for path in detached {
+        to_remove.push((path, None));
     }
 
-    if dry_run {
-        println!("Merged worktrees to remove:");
-        for (_path, branch) in &to_remove {
-            println!("  {branch}");
-        }
-        return Ok(());
-    }
-
-    let selected = if yes {
-        to_remove.clone()
-    } else {
-        let chosen = select_worktrees(&to_remove)?;
-        if chosen.is_empty() {
-            println!("Aborted.");
-            return Ok(());
-        }
-        chosen
-    };
-
-    // Phase 1: Dirty check in parallel (waku artifacts like symlinks make
-    // git status noisy, so use diff + ls-files and exclude waku entries)
+    // Dirty check in parallel
     let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
     let dirty_set: HashSet<String> = if force {
         HashSet::new()
     } else {
         std::thread::scope(|s| {
-            let handles: Vec<_> = selected
+            let handles: Vec<_> = to_remove
                 .iter()
                 .map(|(path, _)| {
                     let config_ref = &waku_config;
@@ -157,21 +140,54 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         })
     };
 
-    // Phase 2: Remove worktrees sequentially (git worktree remove takes a lock)
-    let sp = spinner("Removing worktrees".into());
-    let mut results: Vec<(String, String, bool, Option<String>)> = Vec::new();
-    for (path, branch) in &selected {
-        if dirty_set.contains(path) {
-            results.push((
-                path.clone(),
-                branch.clone(),
-                false,
-                Some(format!(
-                    "'{path}' contains modified or untracked files, use --force to delete"
-                )),
-            ));
-            continue;
+    sp.finish_and_clear();
+
+    if to_remove.is_empty() {
+        println!("No worktrees to clean.");
+        return Ok(());
+    }
+
+    if dry_run {
+        println!("Worktrees to remove:");
+        for (path, branch) in &to_remove {
+            let name = display_name(path, branch.as_deref());
+            if dirty_set.contains(path) {
+                println!("  {name} (dirty)");
+            } else {
+                println!("  {name}");
+            }
         }
+        return Ok(());
+    }
+
+    let selected = if yes {
+        for (path, branch) in &to_remove {
+            if dirty_set.contains(path) {
+                let name = display_name(path, branch.as_deref());
+                let err = anyhow::anyhow!(
+                    "'{path}' contains modified or untracked files, use --force to delete"
+                );
+                print_warning(&format!("skipped worktree '{name}'"), &err);
+            }
+        }
+        to_remove
+            .iter()
+            .filter(|(path, _)| !dirty_set.contains(path))
+            .cloned()
+            .collect()
+    } else {
+        let chosen = select_worktrees(&to_remove, &dirty_set)?;
+        if chosen.is_empty() {
+            println!("Aborted.");
+            return Ok(());
+        }
+        chosen
+    };
+
+    // Remove worktrees sequentially (git worktree remove takes a lock)
+    let sp = spinner("Removing worktrees".into());
+    let mut results: Vec<(String, Option<String>, bool, Option<String>)> = Vec::new();
+    for (path, branch) in &selected {
         match git::git_output_in(&root, &["worktree", "remove", "--force", path]) {
             Ok(_) => results.push((path.clone(), branch.clone(), true, None)),
             Err(e) => results.push((
@@ -186,15 +202,18 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
 
     // Phase 3: Delete branches and report results
     for (path, branch, success, warning) in &results {
+        let name = display_name(path, branch.as_deref());
         if let Some(msg) = warning {
             let err = anyhow::anyhow!("{msg}");
-            print_warning(&format!("failed to remove worktree '{branch}'"), &err);
+            print_warning(&format!("failed to remove worktree '{name}'"), &err);
         }
         if *success {
-            if let Err(e) = git::git_output_in(&root, &["branch", "-D", branch]) {
-                print_warning(&format!("failed to delete branch '{branch}'"), &e);
+            if let Some(b) = branch {
+                if let Err(e) = git::git_output_in(&root, &["branch", "-D", b]) {
+                    print_warning(&format!("failed to delete branch '{b}'"), &e);
+                }
             }
-            println!("Removed: {} ({})", branch, path);
+            println!("Removed: {name} ({path})");
         }
     }
 
@@ -207,15 +226,21 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     Ok(())
 }
 
-fn select_worktrees(items: &[(String, String)]) -> Result<Vec<(String, String)>> {
+fn select_worktrees(
+    items: &[(String, Option<String>)],
+    dirty_set: &HashSet<String>,
+) -> Result<Vec<(String, Option<String>)>> {
     let term = Term::stderr();
     let count = items.len();
-    let mut checked = vec![true; count];
-    let mut cursor = count; // "実行" に初期フォーカス
-    let lines = count + 2; // ヘッダ + items + 実行
+    let mut checked: Vec<bool> = items
+        .iter()
+        .map(|(path, _)| !dirty_set.contains(path))
+        .collect();
+    let mut cursor = count;
+    let lines = count + 2;
 
     term.hide_cursor()?;
-    draw_selector(&term, items, &checked, cursor);
+    draw_selector(&term, items, &checked, dirty_set, cursor);
 
     let result = loop {
         match term.read_key()? {
@@ -238,25 +263,38 @@ fn select_worktrees(items: &[(String, String)]) -> Result<Vec<(String, String)>>
             _ => continue,
         }
         term.clear_last_lines(lines)?;
-        draw_selector(&term, items, &checked, cursor);
+        draw_selector(&term, items, &checked, dirty_set, cursor);
     };
     term.show_cursor()?;
     result
 }
 
-fn draw_selector(term: &Term, items: &[(String, String)], checked: &[bool], cursor: usize) {
+fn draw_selector(
+    term: &Term,
+    items: &[(String, Option<String>)],
+    checked: &[bool],
+    dirty_set: &HashSet<String>,
+    cursor: usize,
+) {
     let _ = term.write_line("Worktrees to remove:");
-    for (i, (_, branch)) in items.iter().enumerate() {
+    for (i, (path, branch)) in items.iter().enumerate() {
+        let name = display_name(path, branch.as_deref());
+        let dirty = dirty_set.contains(path);
+        let label = if dirty {
+            format!("{name} (dirty)")
+        } else {
+            name
+        };
         let mark = if checked[i] { "✔" } else { " " };
         if cursor == i {
             let _ = term.write_line(&format!(
                 "  {} [{}] {}",
                 style("▸").bold(),
                 mark,
-                style(branch).bold()
+                style(&label).bold()
             ));
         } else {
-            let _ = term.write_line(&format!("    [{}] {}", mark, branch));
+            let _ = term.write_line(&format!("    [{}] {}", mark, label));
         }
     }
     if cursor == items.len() {
@@ -268,6 +306,15 @@ fn draw_selector(term: &Term, items: &[(String, String)], checked: &[bool], curs
     } else {
         let _ = term.write_line(&format!("    {}", style("run").dim()));
     }
+}
+
+fn display_name(path: &str, branch: Option<&str>) -> String {
+    branch.map(|b| b.to_string()).unwrap_or_else(|| {
+        std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string())
+    })
 }
 
 fn parse_branch_list(output: &str, exclude: &str) -> Vec<String> {

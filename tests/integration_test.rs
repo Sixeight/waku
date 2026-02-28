@@ -424,6 +424,46 @@ fn clean_dry_run_does_not_remove() {
 }
 
 #[test]
+fn clean_dry_run_shows_dirty_worktrees() {
+    let (_tmp, repo) = setup_repo();
+
+    // Create two worktrees, merge both
+    run_waku(&repo, &["create", "feature-dry-clean"]);
+    let clean_path = repo.parent().unwrap().join("myrepo-worktrees/feature-dry-clean");
+    fs::write(clean_path.join("f.txt"), "f\n").unwrap();
+    run_git(&clean_path, &["add", "."]);
+    run_git(&clean_path, &["commit", "-m", "add f"]);
+    run_git(&repo, &["merge", "--no-ff", "feature-dry-clean"]);
+
+    run_waku(&repo, &["create", "feature-dry-dirty"]);
+    let dirty_path = repo.parent().unwrap().join("myrepo-worktrees/feature-dry-dirty");
+    fs::write(dirty_path.join("g.txt"), "g\n").unwrap();
+    run_git(&dirty_path, &["add", "."]);
+    run_git(&dirty_path, &["commit", "-m", "add g"]);
+    run_git(&repo, &["merge", "--no-ff", "feature-dry-dirty"]);
+
+    // Make one dirty
+    fs::write(dirty_path.join("dirty.txt"), "dirty\n").unwrap();
+
+    let output = run_waku(&repo, &["clean", "--dry-run"]);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("feature-dry-clean"),
+        "should show clean worktree: {stdout}"
+    );
+    assert!(
+        stdout.contains("feature-dry-dirty"),
+        "should show dirty worktree: {stdout}"
+    );
+    assert!(
+        stdout.contains("(dirty)"),
+        "should mark dirty worktree: {stdout}"
+    );
+}
+
+#[test]
 fn clean_does_not_remove_unmerged() {
     let (_tmp, repo) = setup_repo();
 
@@ -683,6 +723,58 @@ fn clean_force_removes_dirty_worktree() {
     );
 
     assert!(!wt_path.exists(), "dirty worktree should be removed with --force");
+}
+
+#[test]
+fn clean_removes_detached_worktree() {
+    let (_tmp, repo) = setup_repo();
+
+    // Create a worktree, add a commit, then detach it and delete the branch
+    run_waku(&repo, &["create", "feature-detached"]);
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-detached");
+    fs::write(wt_path.join("feature.txt"), "feature\n").unwrap();
+    run_git(&wt_path, &["add", "."]);
+    run_git(&wt_path, &["commit", "-m", "add feature"]);
+    // Detach HEAD in the worktree, then delete the branch from main
+    run_git(&wt_path, &["checkout", "--detach"]);
+    run_git(&repo, &["branch", "-D", "feature-detached"]);
+
+    let output = run_waku(&repo, &["clean", "--yes"]);
+    assert!(
+        output.status.success(),
+        "git-waku clean failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(!wt_path.exists(), "detached worktree should be removed");
+}
+
+#[test]
+fn clean_does_not_remove_dirty_detached_worktree() {
+    let (_tmp, repo) = setup_repo();
+
+    // Create a worktree, detach it, delete the branch
+    run_waku(&repo, &["create", "feature-detached-dirty"]);
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-detached-dirty");
+    run_git(&wt_path, &["checkout", "--detach"]);
+    run_git(&repo, &["branch", "-D", "feature-detached-dirty"]);
+
+    // Make it dirty with an untracked file
+    fs::write(wt_path.join("dirty.txt"), "unsaved work\n").unwrap();
+
+    let output = run_waku(&repo, &["clean", "--yes"]);
+    assert!(output.status.success());
+
+    assert!(
+        wt_path.exists(),
+        "dirty detached worktree should NOT be removed without --force"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning"),
+        "should warn about dirty detached worktree: {stderr}"
+    );
 }
 
 // --- rm tests ---
