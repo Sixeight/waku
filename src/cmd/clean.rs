@@ -123,7 +123,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
 
     // Dirty check + commit info in parallel
     let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
-    let (dirty_set, commit_info): (HashSet<String>, HashMap<String, (String, String)>) =
+    let (dirty_set, commit_info): (HashSet<String>, HashMap<String, String>) =
         std::thread::scope(|s| {
             let handles: Vec<_> = to_remove
                 .iter()
@@ -150,8 +150,9 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
                 if is_dirty {
                     dirty.insert(path.clone());
                 }
-                if let Some(info) = commit {
-                    commits.insert(path, info);
+                if let Some((date, subject)) = commit {
+                    let subject = truncate_str(&subject, 50, "…");
+                    commits.insert(path, format!("{date}: {subject}"));
                 }
             }
             (dirty, commits)
@@ -271,7 +272,7 @@ fn select_worktrees(
     items: &[(String, Option<String>)],
     dirty_set: &HashSet<String>,
     unchanged_set: &HashSet<String>,
-    commit_info: &HashMap<String, (String, String)>,
+    commit_info: &HashMap<String, String>,
 ) -> Result<Vec<(String, Option<String>)>> {
     let term = Term::stderr();
     let count = items.len();
@@ -318,7 +319,7 @@ fn draw_selector(
     checked: &[bool],
     dirty_set: &HashSet<String>,
     unchanged_set: &HashSet<String>,
-    commit_info: &HashMap<String, (String, String)>,
+    commit_info: &HashMap<String, String>,
     cursor: usize,
 ) {
     let _ = term.write_line("Worktrees to remove:");
@@ -361,7 +362,7 @@ fn worktree_label(
     branch: Option<&str>,
     dirty_set: &HashSet<String>,
     unchanged_set: &HashSet<String>,
-    commit_info: &HashMap<String, (String, String)>,
+    commit_info: &HashMap<String, String>,
 ) -> String {
     let name = display_name(path, branch);
     let mut parts: Vec<String> = Vec::new();
@@ -371,9 +372,8 @@ fn worktree_label(
     if unchanged_set.contains(path) {
         parts.push("no changes".to_string());
     }
-    if let Some((date, subject)) = commit_info.get(path) {
-        let subject = truncate_str(subject, 50, "…");
-        parts.push(format!("{date}: {subject}"));
+    if let Some(info) = commit_info.get(path) {
+        parts.push(info.clone());
     }
     if parts.is_empty() {
         name
