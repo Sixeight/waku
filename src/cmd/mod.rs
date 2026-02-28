@@ -19,26 +19,16 @@ pub fn spinner(msg: String) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
-            .tick_strings(&["   ", ".  ", ".. ", "...", "   "])
-            .template("  {prefix} {msg:.dim}{spinner:.dim}")
+            .tick_strings(&[
+                "ﾜ   ", "ﾜ.  ", "ﾜ.. ", "ﾜ...",
+                "ｸ   ", "ｸ.  ", "ｸ.. ", "ｸ...",
+                "ﾜ   ",
+            ])
+            .template("  {spinner:.dim} {msg:.dim}")
             .unwrap(),
     );
-    pb.set_prefix("ﾜ");
     pb.set_message(msg);
-    pb.enable_steady_tick(Duration::from_millis(400));
-
-    let pb2 = pb.clone();
-    std::thread::spawn(move || {
-        let mut waku = false;
-        loop {
-            std::thread::sleep(Duration::from_millis(120));
-            if pb2.is_finished() {
-                break;
-            }
-            waku = !waku;
-            pb2.set_prefix(if waku { "ﾜ" } else { "ｸ" });
-        }
-    });
+    pb.enable_steady_tick(Duration::from_millis(200));
 
     pb
 }
