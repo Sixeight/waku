@@ -421,6 +421,10 @@ fn clean_dry_run_does_not_remove() {
         stdout.contains("feature-dry"),
         "dry-run should list the worktree: {stdout}"
     );
+    assert!(
+        stdout.contains("add feature"),
+        "dry-run should show commit subject: {stdout}"
+    );
 }
 
 #[test]
@@ -458,8 +462,12 @@ fn clean_dry_run_shows_dirty_worktrees() {
         "should show dirty worktree: {stdout}"
     );
     assert!(
-        stdout.contains("(dirty)"),
-        "should mark dirty worktree: {stdout}"
+        stdout.contains("(dirty,"),
+        "should mark dirty worktree with commit info: {stdout}"
+    );
+    assert!(
+        stdout.contains("add g"),
+        "should include commit subject for dirty worktree: {stdout}"
     );
 }
 
@@ -1433,4 +1441,30 @@ fn config_get_regexp_returns_empty_for_no_match() {
 
     let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-no-config");
     assert!(wt_path.exists());
+}
+
+#[test]
+fn clean_dry_run_dirty_and_unchanged() {
+    let (_tmp, repo) = setup_repo();
+
+    // Create an undiverged worktree (no commits) and make it dirty
+    run_waku(&repo, &["create", "feature-dirty-unchanged"]);
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-dirty-unchanged");
+    fs::write(wt_path.join("scratch.txt"), "wip\n").unwrap();
+
+    let output = run_waku(&repo, &["clean", "--dry-run"]);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("dirty"),
+        "should show dirty label: {stdout}"
+    );
+    assert!(
+        stdout.contains("no changes"),
+        "should also show no changes when dirty and unchanged: {stdout}"
+    );
 }

@@ -105,6 +105,13 @@ pub fn is_merge_noop(dir: &Path, target: &str, source: &str) -> Result<bool> {
     Ok(merge_tree == target_tree)
 }
 
+/// Return (relative_date, subject) for the most recent commit in `dir`.
+pub fn last_commit_info(dir: &Path) -> Option<(String, String)> {
+    let raw = git_output_in(dir, &["log", "-1", "--format=%cr%x00%s"]).ok()?;
+    let (date, subject) = raw.split_once('\x00')?;
+    Some((date.to_string(), subject.to_string()))
+}
+
 /// Parse `git worktree list --porcelain` output into (path, branch) pairs.
 pub fn worktree_list(dir: &Path) -> Result<Vec<(String, Option<String>)>> {
     let raw = git_output_in(dir, &["worktree", "list", "--porcelain"])?;

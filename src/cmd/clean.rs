@@ -1,7 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use console::{style, Key, Term};
+use console::{style, truncate_str, Key, Term};
 
 use super::{cleanup_empty_dirs, print_warning, spinner};
 use crate::{git, worktree};
@@ -121,31 +121,41 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         to_remove.push((path.clone(), None));
     }
 
-    // Dirty check in parallel
+    // Dirty check + commit info in parallel
     let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
-    let dirty_set: HashSet<String> = if force {
-        HashSet::new()
-    } else {
+    let (dirty_set, commit_info): (HashSet<String>, HashMap<String, (String, String)>) =
         std::thread::scope(|s| {
             let handles: Vec<_> = to_remove
                 .iter()
                 .map(|(path, _)| {
                     let config_ref = &waku_config;
+                    let unchanged_ref = &unchanged_set;
                     s.spawn(move || {
                         let wt_path = std::path::Path::new(path);
-                        (path.clone(), super::remove::is_worktree_dirty(wt_path, config_ref))
+                        let is_dirty =
+                            !force && super::remove::is_worktree_dirty(wt_path, config_ref);
+                        let commit = if unchanged_ref.contains(path) {
+                            None
+                        } else {
+                            git::last_commit_info(wt_path)
+                        };
+                        (path.clone(), is_dirty, commit)
                     })
                 })
                 .collect();
-            handles
-                .into_iter()
-                .filter_map(|h| {
-                    let (path, dirty) = h.join().unwrap();
-                    dirty.then_some(path)
-                })
-                .collect()
-        })
-    };
+            let mut dirty = HashSet::new();
+            let mut commits = HashMap::new();
+            for h in handles {
+                let (path, is_dirty, commit) = h.join().unwrap();
+                if is_dirty {
+                    dirty.insert(path.clone());
+                }
+                if let Some(info) = commit {
+                    commits.insert(path, info);
+                }
+            }
+            (dirty, commits)
+        });
 
     // Summary of found worktrees
     let unchanged_count = unchanged_set.len();
@@ -186,7 +196,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     if dry_run {
         println!("Worktrees to remove:");
         for (path, branch) in &to_remove {
-            let label = worktree_label(path, branch.as_deref(), &dirty_set, &unchanged_set);
+            let label = worktree_label(path, branch.as_deref(), &dirty_set, &unchanged_set, &commit_info);
             println!("  {label}");
         }
         return Ok(());
@@ -213,7 +223,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
             .cloned()
             .collect()
     } else {
-        let chosen = select_worktrees(&to_remove, &dirty_set, &unchanged_set)?;
+        let chosen = select_worktrees(&to_remove, &dirty_set, &unchanged_set, &commit_info)?;
         if chosen.is_empty() {
             println!("Aborted.");
             return Ok(());
@@ -261,6 +271,7 @@ fn select_worktrees(
     items: &[(String, Option<String>)],
     dirty_set: &HashSet<String>,
     unchanged_set: &HashSet<String>,
+    commit_info: &HashMap<String, (String, String)>,
 ) -> Result<Vec<(String, Option<String>)>> {
     let term = Term::stderr();
     let count = items.len();
@@ -272,7 +283,7 @@ fn select_worktrees(
     let lines = count + 2;
 
     term.hide_cursor()?;
-    draw_selector(&term, items, &checked, dirty_set, unchanged_set, cursor);
+    draw_selector(&term, items, &checked, dirty_set, unchanged_set, commit_info, cursor);
 
     let result = loop {
         match term.read_key()? {
@@ -295,7 +306,7 @@ fn select_worktrees(
             _ => continue,
         }
         term.clear_last_lines(lines)?;
-        draw_selector(&term, items, &checked, dirty_set, unchanged_set, cursor);
+        draw_selector(&term, items, &checked, dirty_set, unchanged_set, commit_info, cursor);
     };
     term.show_cursor()?;
     result
@@ -307,11 +318,12 @@ fn draw_selector(
     checked: &[bool],
     dirty_set: &HashSet<String>,
     unchanged_set: &HashSet<String>,
+    commit_info: &HashMap<String, (String, String)>,
     cursor: usize,
 ) {
     let _ = term.write_line("Worktrees to remove:");
     for (i, (path, branch)) in items.iter().enumerate() {
-        let label = worktree_label(path, branch.as_deref(), dirty_set, unchanged_set);
+        let label = worktree_label(path, branch.as_deref(), dirty_set, unchanged_set, commit_info);
         let mark = if checked[i] { "✔" } else { " " };
         if cursor == i {
             let _ = term.write_line(&format!(
@@ -349,14 +361,24 @@ fn worktree_label(
     branch: Option<&str>,
     dirty_set: &HashSet<String>,
     unchanged_set: &HashSet<String>,
+    commit_info: &HashMap<String, (String, String)>,
 ) -> String {
     let name = display_name(path, branch);
+    let mut parts: Vec<String> = Vec::new();
     if dirty_set.contains(path) {
-        format!("{name} (dirty)")
-    } else if unchanged_set.contains(path) {
-        format!("{name} (no changes)")
-    } else {
+        parts.push("dirty".to_string());
+    }
+    if unchanged_set.contains(path) {
+        parts.push("no changes".to_string());
+    }
+    if let Some((date, subject)) = commit_info.get(path) {
+        let subject = truncate_str(subject, 50, "…");
+        parts.push(format!("{date}: {subject}"));
+    }
+    if parts.is_empty() {
         name
+    } else {
+        format!("{name} ({})", parts.join(", "))
     }
 }
 
