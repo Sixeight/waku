@@ -1194,3 +1194,110 @@ fn completions_generates_zsh() {
         "completions should reference the binary name: {stdout}"
     );
 }
+
+#[test]
+fn remove_dirty_check_ignores_waku_symlinks() {
+    let (_tmp, repo) = setup_repo();
+
+    // Configure a symlink entry
+    run_git(&repo, &["config", "waku.link.include", "node_modules"]);
+    fs::create_dir(repo.join("node_modules")).unwrap();
+    fs::write(repo.join("node_modules/pkg.json"), "{}").unwrap();
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-m", "add node_modules"]);
+
+    run_waku(&repo, &["create", "feature-waku-link"]);
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-waku-link");
+
+    // The symlink itself is a waku artifact and should not count as dirty.
+    // Remove without --force should succeed on a clean worktree with only waku artifacts.
+    let output = run_waku(&repo, &["remove", "feature-waku-link"]);
+    assert!(
+        output.status.success(),
+        "remove should succeed when only waku artifacts are present: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!wt_path.exists());
+}
+
+#[test]
+fn remove_dirty_check_detects_real_changes_alongside_waku_artifacts() {
+    let (_tmp, repo) = setup_repo();
+
+    run_git(&repo, &["config", "waku.link.include", "node_modules"]);
+    fs::create_dir(repo.join("node_modules")).unwrap();
+    fs::write(repo.join("node_modules/pkg.json"), "{}").unwrap();
+    run_git(&repo, &["add", "."]);
+    run_git(&repo, &["commit", "-m", "add node_modules"]);
+
+    run_waku(&repo, &["create", "feature-waku-dirty"]);
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-waku-dirty");
+
+    // Add a real untracked file (not a waku artifact)
+    fs::write(wt_path.join("real-change.txt"), "dirty\n").unwrap();
+
+    let output = run_waku(&repo, &["remove", "feature-waku-dirty"]);
+    assert!(
+        !output.status.success(),
+        "remove should fail when real changes exist alongside waku artifacts"
+    );
+    assert!(wt_path.exists(), "worktree should not be removed");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--force"),
+        "should suggest --force: {stderr}"
+    );
+}
+
+#[test]
+fn remove_cleans_up_empty_dirs_even_when_branch_delete_fails() {
+    let (_tmp, repo) = setup_repo();
+
+    run_waku(&repo, &["create", "feature-branch-fail"]);
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-branch-fail");
+
+    // Add an unmerged commit so that `git branch -d` (without -D) will fail
+    fs::write(wt_path.join("unmerged.txt"), "not merged\n").unwrap();
+    run_git(&wt_path, &["add", "."]);
+    run_git(&wt_path, &["commit", "-m", "unmerged commit"]);
+
+    // Remove without --force: worktree is clean, but branch is not fully merged
+    let output = run_waku(&repo, &["remove", "feature-branch-fail"]);
+    assert!(
+        output.status.success(),
+        "remove should succeed even when branch delete fails: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!wt_path.exists(), "worktree should be removed");
+
+    // Branch delete warning should appear
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("warning"),
+        "should warn about failed branch delete: {stderr}"
+    );
+
+    // Empty worktrees directory should still be cleaned up
+    let worktrees_dir = repo.parent().unwrap().join("myrepo-worktrees");
+    assert!(
+        !worktrees_dir.exists(),
+        "empty worktrees directory should be cleaned up"
+    );
+}
+
+#[test]
+fn config_get_regexp_returns_empty_for_no_match() {
+    let (_tmp, repo) = setup_repo();
+
+    // No waku config set — should return empty without error
+    let output = run_waku(&repo, &["create", "feature-no-config"]);
+    assert!(
+        output.status.success(),
+        "create should succeed without any waku config: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-no-config");
+    assert!(wt_path.exists());
+}
