@@ -68,7 +68,9 @@ git waku clean --yes                        # skip confirmation
 git waku clean --yes --force                # also remove dirty worktrees
 ```
 
-Detects both regular merges and squash merges. Branches that have not diverged from main (no unique commits) are treated as "not yet started" and skipped. As a side effect, fast-forward merged branches are also skipped — use `git waku remove` to remove them manually.
+Detects both regular merges and squash merges. Detached worktrees (where the branch has been deleted) are also included. Dirty worktrees appear in the list marked as `(dirty)` and are unchecked by default — you can select them to force-remove, or use `--force` to include them all.
+
+Branches that have not diverged from main (no unique commits) are treated as "not yet started" and skipped. As a side effect, fast-forward merged branches are also skipped — use `git waku remove` to remove them manually.
 
 ### Passthrough
 
