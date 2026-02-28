@@ -199,20 +199,6 @@ pub fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
-/// Remove files placed by `.worktreeinclude` processing from a worktree.
-pub fn remove_worktreeinclude_files(wt_path: &Path, root: &Path) -> Result<()> {
-    let files = collect_worktreeinclude_files(root)?;
-    for rel in &files {
-        let target = wt_path.join(rel);
-        if target.is_dir() && !target.is_symlink() {
-            let _ = fs::remove_dir_all(&target);
-        } else if target.exists() || target.is_symlink() {
-            let _ = fs::remove_file(&target);
-        }
-    }
-    Ok(())
-}
-
 /// Recursively copy a file or directory from `src` to `dst`.
 pub fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
     if src.is_dir() {
@@ -231,31 +217,6 @@ pub fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
         }
         fs::copy(src, dst)
             .with_context(|| format!("failed to copy {} -> {}", src.display(), dst.display()))?;
-    }
-    Ok(())
-}
-
-/// Remove copies created by `waku new` from a worktree directory.
-/// Reads `waku.copy.include` config and removes matching entries.
-pub fn remove_waku_copies(wt_path: &Path) -> Result<()> {
-    let includes = git::config_get_regexp(r"^waku\.copy\.include$")?;
-    for (_, name) in &includes {
-        let target = wt_path.join(name);
-        remove_existing(&target)?;
-    }
-    Ok(())
-}
-
-/// Remove symlinks created by `waku new` from a worktree directory.
-/// Reads `waku.link.include` config and removes matching symlinks.
-pub fn remove_waku_symlinks(wt_path: &Path) -> Result<()> {
-    let includes = git::config_get_regexp(r"^waku\.link\.include$")?;
-    for (_, name) in &includes {
-        let target = wt_path.join(name);
-        if target.is_symlink() {
-            fs::remove_file(&target)
-                .with_context(|| format!("failed to remove symlink: {}", target.display()))?;
-        }
     }
     Ok(())
 }
