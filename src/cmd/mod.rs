@@ -15,12 +15,14 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::{git, worktree};
 
+const SPINNER_TEMPLATE: &str = "  {prefix} {msg:.dim}{spinner:.dim}";
+
 pub fn spinner(msg: String) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
             .tick_strings(&["   ", ".  ", ".. ", "...", "   "])
-            .template("  {prefix} {msg:.dim}{spinner:.dim}")
+            .template(SPINNER_TEMPLATE)
             .unwrap(),
     );
     pb.set_prefix("ﾜ");
@@ -311,5 +313,15 @@ mod tests {
         let config: Vec<(String, String)> = vec![];
         let result: Vec<&str> = config_values(&config, "waku.link.include");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn spinner_template_has_dots_after_message() {
+        let msg_pos = SPINNER_TEMPLATE.find("{msg").expect("{msg} should exist in template");
+        let spinner_pos = SPINNER_TEMPLATE.find("{spinner").expect("{spinner} should exist in template");
+        assert!(
+            spinner_pos > msg_pos,
+            "{{spinner}} (dots) must appear after {{msg}} in template: {SPINNER_TEMPLATE}"
+        );
     }
 }
