@@ -45,9 +45,7 @@ pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
         if let Some(ref branch) = branch {
             let delete_flag = if force { "-D" } else { "-d" };
             if let Err(e) = git::git_output_in(&root, &["branch", delete_flag, branch]) {
-                sp.finish_and_clear();
                 print_warning(&format!("failed to delete branch '{branch}'"), &e);
-                return Ok(());
             }
         }
     }
