@@ -199,6 +199,15 @@ pub fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
+/// Extract values for a given config key.
+pub fn config_values<'a>(config: &'a [(String, String)], key: &str) -> Vec<&'a str> {
+    config
+        .iter()
+        .filter(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+        .collect()
+}
+
 /// Recursively copy a file or directory from `src` to `dst`.
 pub fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
     if src.is_dir() {

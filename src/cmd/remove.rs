@@ -69,10 +69,9 @@ pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
 /// Check if a worktree has real modifications, ignoring waku artifacts.
 /// Returns `true` (dirty) when git commands fail, to avoid accidental data loss.
 pub fn is_worktree_dirty(path: &Path, config: &[(String, String)]) -> bool {
-    let waku_entries: HashSet<&str> = config
-        .iter()
-        .filter(|(k, _)| k == "waku.link.include" || k == "waku.copy.include")
-        .map(|(_, v)| v.as_str())
+    let waku_entries: HashSet<&str> = super::config_values(config, "waku.link.include")
+        .into_iter()
+        .chain(super::config_values(config, "waku.copy.include"))
         .collect();
     let waku_prefixes: Vec<String> = waku_entries.iter().map(|e| format!("{e}/")).collect();
 

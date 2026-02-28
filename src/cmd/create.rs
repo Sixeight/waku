@@ -104,7 +104,7 @@ fn create_symlinks(
     config: &[(String, String)],
     quiet: bool,
 ) -> Result<()> {
-    let includes = config_values(config, "waku.link.include");
+    let includes = super::config_values(config, "waku.link.include");
 
     for name in includes {
         let source = root.join(name);
@@ -132,7 +132,7 @@ fn create_copies(
     config: &[(String, String)],
     quiet: bool,
 ) -> Result<()> {
-    let copies = config_values(config, "waku.copy.include");
+    let copies = super::config_values(config, "waku.copy.include");
     let valid: Vec<&str> = copies
         .iter()
         .filter(|name| {
@@ -201,7 +201,7 @@ fn run_post_create_hooks(
     config: &[(String, String)],
     quiet: bool,
 ) -> Result<()> {
-    let hooks = config_values(config, "waku.hook.postcreate");
+    let hooks = super::config_values(config, "waku.hook.postcreate");
 
     for hook in hooks {
         if !quiet {
@@ -277,10 +277,3 @@ fn copy_entries_parallel(root: &Path, wt_path: &Path, names: &[&str], quiet: boo
     }
 }
 
-fn config_values<'a>(config: &'a [(String, String)], key: &str) -> Vec<&'a str> {
-    config
-        .iter()
-        .filter(|(k, _)| k == key)
-        .map(|(_, v)| v.as_str())
-        .collect()
-}
