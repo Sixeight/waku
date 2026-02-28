@@ -9,8 +9,6 @@ use crate::{git, worktree};
 pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     let root = worktree::repo_root()?;
 
-    let sp = spinner("Checking merged worktrees".into());
-
     // Fast local operations first
     let main_branch = git::git_output_in(&root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     let upstream_ref = format!("{main_branch}@{{upstream}}");
@@ -18,12 +16,15 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         git::git_output_in(&root, &["rev-parse", "--abbrev-ref", &upstream_ref]).ok();
 
     // Slow operations in parallel (fetch is network I/O)
+    let sp = spinner("Fetching remote".into());
     let (_fetch_result, worktrees) = std::thread::scope(|s| {
         let fetch_handle = s.spawn(|| git::git_output_in(&root, &["fetch"]));
         let wt_handle = s.spawn(|| git::worktree_list(&root));
         (fetch_handle.join().unwrap(), wt_handle.join().unwrap())
     });
     let worktrees = worktrees?;
+    sp.finish_and_clear();
+    eprintln!("  {} Fetched remote", style("✔").green());
 
     let mut check_refs = vec![main_branch.clone()];
     if let Some(ref u) = upstream {
@@ -110,8 +111,8 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         .collect();
 
     // Detached worktrees have no branch — always candidates for removal
-    for path in detached {
-        to_remove.push((path, None));
+    for path in &detached {
+        to_remove.push((path.clone(), None));
     }
 
     // Dirty check in parallel
@@ -140,7 +141,28 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         })
     };
 
-    sp.finish_and_clear();
+    // Summary of found worktrees
+    let merged_count = to_remove.iter().filter(|(_, b)| b.is_some()).count();
+    let detached_count = detached.len();
+    let mut found_parts = Vec::new();
+    if merged_count > 0 {
+        found_parts.push(format!("{merged_count} merged"));
+    }
+    if detached_count > 0 {
+        found_parts.push(format!("{detached_count} detached"));
+    }
+    if !found_parts.is_empty() {
+        let wt_word = if merged_count + detached_count == 1 {
+            "worktree"
+        } else {
+            "worktrees"
+        };
+        eprintln!(
+            "  {} Found {} {wt_word}",
+            style("✔").green(),
+            found_parts.join(", "),
+        );
+    }
 
     if to_remove.is_empty() {
         println!("No worktrees to clean.");
@@ -164,6 +186,11 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         for (path, branch) in &to_remove {
             if dirty_set.contains(path) {
                 let name = display_name(path, branch.as_deref());
+                eprintln!(
+                    "  {} Skipped {} (dirty)",
+                    style("⚠").yellow(),
+                    name,
+                );
                 let err = anyhow::anyhow!(
                     "'{path}' contains modified or untracked files, use --force to delete"
                 );
@@ -185,35 +212,29 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     };
 
     // Remove worktrees sequentially (git worktree remove takes a lock)
-    let sp = spinner("Removing worktrees".into());
-    let mut results: Vec<(String, Option<String>, bool, Option<String>)> = Vec::new();
     for (path, branch) in &selected {
-        match git::git_output_in(&root, &["worktree", "remove", "--force", path]) {
-            Ok(_) => results.push((path.clone(), branch.clone(), true, None)),
-            Err(e) => results.push((
-                path.clone(),
-                branch.clone(),
-                false,
-                Some(format!("failed to remove worktree: {e}")),
-            )),
-        }
-    }
-    sp.finish_and_clear();
-
-    // Phase 3: Delete branches and report results
-    for (path, branch, success, warning) in &results {
         let name = display_name(path, branch.as_deref());
-        if let Some(msg) = warning {
-            let err = anyhow::anyhow!("{msg}");
-            print_warning(&format!("failed to remove worktree '{name}'"), &err);
-        }
-        if *success {
-            if let Some(b) = branch {
-                if let Err(e) = git::git_output_in(&root, &["branch", "-D", b]) {
-                    print_warning(&format!("failed to delete branch '{b}'"), &e);
+        let sp = spinner(format!("Removing {name}"));
+        match git::git_output_in(&root, &["worktree", "remove", "--force", path]) {
+            Ok(_) => {
+                sp.finish_and_clear();
+                if let Some(b) = branch {
+                    if let Err(e) = git::git_output_in(&root, &["branch", "-D", b]) {
+                        print_warning(&format!("failed to delete branch '{b}'"), &e);
+                    }
                 }
+                eprintln!("  {} Removed {}", style("✔").green(), name);
             }
-            println!("Removed: {name} ({path})");
+            Err(e) => {
+                sp.finish_and_clear();
+                eprintln!(
+                    "  {} Failed to remove {}",
+                    style("✘").red().bold(),
+                    name
+                );
+                let err = anyhow::anyhow!("failed to remove worktree: {e}");
+                print_warning(&format!("failed to remove worktree '{name}'"), &err);
+            }
         }
     }
 
