@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::Result;
 use console::{style, Key, Term};
 
@@ -131,8 +133,8 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     // Phase 1: Dirty check in parallel (waku artifacts like symlinks make
     // git status noisy, so use diff + ls-files and exclude waku entries)
     let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
-    let dirty_set: std::collections::HashSet<String> = if force {
-        std::collections::HashSet::new()
+    let dirty_set: HashSet<String> = if force {
+        HashSet::new()
     } else {
         std::thread::scope(|s| {
             let handles: Vec<_> = selected
@@ -165,7 +167,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
                 branch.clone(),
                 false,
                 Some(format!(
-                    "'{path}' contains modified files, use --force to delete"
+                    "'{path}' contains modified or untracked files, use --force to delete"
                 )),
             ));
             continue;
