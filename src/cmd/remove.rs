@@ -69,25 +69,32 @@ pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
 }
 
 /// Check if a worktree has real modifications, ignoring waku artifacts.
+/// Returns `true` (dirty) when git commands fail, to avoid accidental data loss.
 pub fn is_worktree_dirty(path: &Path, config: &[(String, String)]) -> bool {
     let waku_entries: HashSet<&str> = config
         .iter()
         .filter(|(k, _)| k == "waku.link.include" || k == "waku.copy.include")
         .map(|(_, v)| v.as_str())
         .collect();
+    let waku_prefixes: Vec<String> = waku_entries.iter().map(|e| format!("{e}/")).collect();
 
-    let tracked = git::git_output_in(path, &["diff", "--name-only", "HEAD"])
-        .unwrap_or_default();
-    let has_tracked_changes = tracked
-        .lines()
-        .any(|line| !waku_entries.iter().any(|e| line == *e || line.starts_with(&format!("{e}/"))));
+    let is_waku_artifact = |line: &str| -> bool {
+        waku_entries.contains(line)
+            || waku_prefixes.iter().any(|p| line.starts_with(p.as_str()))
+    };
 
-    let untracked =
-        git::git_output_in(path, &["ls-files", "--others", "--exclude-standard"])
-            .unwrap_or_default();
-    let has_untracked = untracked
-        .lines()
-        .any(|line| !waku_entries.iter().any(|e| line == *e || line.starts_with(&format!("{e}/"))));
+    let tracked = match git::git_output_in(path, &["diff", "--name-only", "HEAD"]) {
+        Ok(output) => output,
+        Err(_) => return true,
+    };
+    if tracked.lines().any(|line| !is_waku_artifact(line)) {
+        return true;
+    }
 
-    has_tracked_changes || has_untracked
+    let untracked = match git::git_output_in(path, &["ls-files", "--others", "--exclude-standard"])
+    {
+        Ok(output) => output,
+        Err(_) => return true,
+    };
+    untracked.lines().any(|line| !is_waku_artifact(line))
 }
