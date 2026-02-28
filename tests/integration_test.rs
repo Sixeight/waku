@@ -487,8 +487,12 @@ fn clean_dry_run_shows_unchanged_worktrees() {
         "should show unchanged worktree: {stdout}"
     );
     assert!(
-        stdout.contains("(no changes)"),
-        "should mark unchanged worktree with (no changes): {stdout}"
+        stdout.contains("no changes"),
+        "should mark unchanged worktree with no changes: {stdout}"
+    );
+    assert!(
+        stdout.contains("initial"),
+        "should show commit subject for unchanged worktree: {stdout}"
     );
 }
 

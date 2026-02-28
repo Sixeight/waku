@@ -129,16 +129,11 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
                 .iter()
                 .map(|(path, _)| {
                     let config_ref = &waku_config;
-                    let unchanged_ref = &unchanged_set;
                     s.spawn(move || {
                         let wt_path = std::path::Path::new(path);
                         let is_dirty =
                             !force && super::remove::is_worktree_dirty(wt_path, config_ref);
-                        let commit = if unchanged_ref.contains(path) {
-                            None
-                        } else {
-                            git::last_commit_info(wt_path)
-                        };
+                        let commit = git::last_commit_info(wt_path);
                         (path.clone(), is_dirty, commit)
                     })
                 })
