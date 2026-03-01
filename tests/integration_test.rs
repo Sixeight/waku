@@ -1448,6 +1448,44 @@ fn config_get_regexp_returns_empty_for_no_match() {
 }
 
 #[test]
+fn create_worktreeinclude_glob_copies_nested_env() {
+    let (_tmp, repo) = setup_repo();
+
+    // Create a nested .env file that is gitignored
+    fs::create_dir(repo.join("sub")).unwrap();
+    fs::write(repo.join("sub/.env"), "SUB_SECRET=abc").unwrap();
+    fs::write(repo.join(".env"), "ROOT_SECRET=xyz").unwrap();
+
+    fs::write(repo.join(".gitignore"), ".env\n").unwrap();
+    run_git(&repo, &["add", ".gitignore"]);
+    run_git(&repo, &["commit", "-m", "add gitignore"]);
+
+    // Use glob pattern in .worktreeinclude
+    fs::write(repo.join(".worktreeinclude"), "**/.env\n").unwrap();
+
+    let output = run_waku(&repo, &["create", "feature-glob-env"]);
+    assert!(
+        output.status.success(),
+        "git-waku create failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-glob-env");
+    assert!(
+        wt_path.join(".env").exists(),
+        "root .env should be copied to worktree"
+    );
+    assert!(
+        wt_path.join("sub/.env").exists(),
+        "sub/.env should be copied to worktree via glob pattern"
+    );
+    assert_eq!(
+        fs::read_to_string(wt_path.join("sub/.env")).unwrap(),
+        "SUB_SECRET=abc"
+    );
+}
+
+#[test]
 fn clean_dry_run_dirty_and_unchanged() {
     let (_tmp, repo) = setup_repo();
 

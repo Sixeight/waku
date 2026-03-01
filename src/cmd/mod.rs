@@ -161,6 +161,10 @@ impl WorktreeIncludeMode {
     }
 }
 
+fn is_glob_pattern(s: &str) -> bool {
+    s.contains('*') || s.contains('?') || s.contains('[')
+}
+
 /// Collect files matching `.worktreeinclude` patterns that are also gitignored.
 /// Returns relative paths from `root`.
 pub fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>> {
@@ -172,13 +176,35 @@ pub fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>> {
     let wti_content = fs::read_to_string(&wti_path)
         .with_context(|| format!("failed to read {}", wti_path.display()))?;
 
-    let candidates: Vec<&str> = wti_content
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| l.trim_end_matches('/'))
-        .filter(|name| root.join(name).exists())
-        .collect();
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+
+    for raw in wti_content.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.trim_end_matches('/');
+
+        if is_glob_pattern(line) {
+            let pattern = format!("{}/{}", root.display(), line);
+            if let Ok(entries) = glob::glob(&pattern) {
+                for entry in entries.flatten() {
+                    if let Ok(rel) = entry.strip_prefix(root) {
+                        let s = rel.to_string_lossy().into_owned();
+                        if seen.insert(s.clone()) {
+                            candidates.push(s);
+                        }
+                    }
+                }
+            }
+        } else if root.join(line).exists() {
+            let s = line.to_string();
+            if seen.insert(s.clone()) {
+                candidates.push(s);
+            }
+        }
+    }
 
     if candidates.is_empty() {
         return Ok(vec![]);
@@ -196,7 +222,7 @@ pub fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>> {
 
     Ok(candidates
         .into_iter()
-        .filter(|name| ignored.contains(name))
+        .filter(|name| ignored.contains(name.as_str()))
         .map(PathBuf::from)
         .collect())
 }
