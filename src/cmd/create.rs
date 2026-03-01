@@ -2,7 +2,6 @@ use std::fs;
 use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
 use anyhow::{Context, Result};
 use console::style;
 
@@ -28,11 +27,37 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
     let wt_path = worktree::worktree_path_with_config(&root, branch, &waku_config)?;
 
-    create_worktree(&root, &wt_path, branch, opts.from.as_deref(), opts.quiet)?;
+    // Collect worktreeinclude files in parallel with worktree creation
+    // since both only depend on root, not on wt_path.
+    let wti_mode = WorktreeIncludeMode::from_config(&waku_config);
+    let (wt_result, wti_files) = std::thread::scope(|s| {
+        let wti_handle = s.spawn(|| {
+            if wti_mode == WorktreeIncludeMode::Ignore {
+                return Ok(vec![]);
+            }
+            collect_worktreeinclude_files(&root)
+        });
+        let wt_result = create_worktree(&root, &wt_path, branch, opts.from.as_deref(), opts.quiet);
+
+        // Spinner covers the wait if file collection outlasts worktree creation.
+        // Finishes instantly if the thread is already done.
+        let sp = if !opts.quiet {
+            Some(spinner("Collecting files".to_string()))
+        } else {
+            None
+        };
+        let wti_files = wti_handle.join().unwrap();
+        if let Some(sp) = sp {
+            sp.finish_and_clear();
+        }
+
+        (wt_result, wti_files)
+    });
+    wt_result?;
 
     create_symlinks(&root, &wt_path, &waku_config, opts.quiet)?;
     create_copies(&root, &wt_path, &waku_config, opts.quiet)?;
-    process_worktreeinclude(&root, &wt_path, &waku_config, opts.quiet)?;
+    apply_worktreeinclude(&root, &wt_path, wti_mode, wti_files?, opts.quiet)?;
     run_post_create_hooks(&wt_path, &waku_config, opts.quiet)?;
 
     if opts.ai {
@@ -160,27 +185,13 @@ fn create_copies(
     Ok(())
 }
 
-fn process_worktreeinclude(
+fn apply_worktreeinclude(
     root: &Path,
     wt_path: &Path,
-    config: &[(String, String)],
+    mode: WorktreeIncludeMode,
+    files: Vec<PathBuf>,
     quiet: bool,
 ) -> Result<()> {
-    let mode = WorktreeIncludeMode::from_config(config);
-    if mode == WorktreeIncludeMode::Ignore {
-        return Ok(());
-    }
-
-    let sp = if quiet {
-        None
-    } else {
-        Some(spinner("Collecting .worktreeinclude files".to_string()))
-    };
-    let files = collect_worktreeinclude_files(root);
-    if let Some(sp) = sp {
-        sp.finish_and_clear();
-    }
-    let files = files?;
     if files.is_empty() {
         return Ok(());
     }
@@ -253,34 +264,50 @@ fn link_entry(source: &Path, target: &Path) -> Result<()> {
 
 /// Copy multiple entries from `root` to `wt_path` in parallel.
 fn copy_entries_parallel(root: &Path, wt_path: &Path, names: &[&str], quiet: bool) {
+    let sp = if quiet {
+        None
+    } else {
+        let label = if names.len() <= 3 {
+            names.join(", ")
+        } else {
+            format!("{} (+{} more)", names[..2].join(", "), names.len() - 2)
+        };
+        Some(spinner(format!("Copying {label}")))
+    };
+
     let results: Vec<(&str, Result<()>)> = std::thread::scope(|s| {
         let handles: Vec<_> = names
             .iter()
             .map(|name| {
                 let source = root.join(name);
                 let target = wt_path.join(name);
-                s.spawn(move || -> Result<()> {
-                    remove_existing(&target)?;
-                    copy_recursive(&source, &target)
+                s.spawn(move || {
+                    let result = remove_existing(&target)
+                        .and_then(|_| copy_recursive(&source, &target));
+                    (*name, result)
                 })
             })
             .collect();
-        names
-            .iter()
-            .zip(handles)
-            .map(|(name, h)| (*name, h.join().unwrap()))
-            .collect()
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
+
+    if let Some(sp) = sp {
+        sp.finish_and_clear();
+    }
     if !quiet {
-        for (name, result) in results {
+        for (name, result) in &results {
             match result {
-                Ok(()) => eprintln!("  {} Copied {}", style("✔").green(), name),
-                Err(e) => eprintln!(
-                    "  {} Failed to copy {}: {}",
-                    style("✘").red().bold(),
-                    name,
-                    e
-                ),
+                Ok(()) => {
+                    eprintln!("  {} Copied {}", style("✔").green(), name);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "  {} Failed to copy {}: {}",
+                        style("✘").red().bold(),
+                        name,
+                        e
+                    );
+                }
             }
         }
     }
