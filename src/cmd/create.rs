@@ -171,15 +171,14 @@ fn process_worktreeinclude(
         return Ok(());
     }
 
-    let pb = if !quiet {
-        let pb = spinner("Collecting .worktreeinclude files".to_string());
-        Some(pb)
-    } else {
+    let sp = if quiet {
         None
+    } else {
+        Some(spinner("Collecting .worktreeinclude files".to_string()))
     };
     let files = collect_worktreeinclude_files(root);
-    if let Some(pb) = pb {
-        pb.finish_and_clear();
+    if let Some(sp) = sp {
+        sp.finish_and_clear();
     }
     let files = files?;
     if files.is_empty() {
