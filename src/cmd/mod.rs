@@ -198,19 +198,26 @@ pub fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>> {
 
     // Glob patterns: delegate to git ls-files with pathspecs to avoid
     // traversing large directories (e.g. node_modules/) ourselves.
+    // Then verify each result client-side because some git versions
+    // may not filter :(glob) pathspecs correctly.
     if !glob_patterns.is_empty() {
+        let compiled: Vec<glob::Pattern> = glob_patterns
+            .iter()
+            .filter_map(|p| glob::Pattern::new(p).ok())
+            .collect();
         let pathspecs: Vec<String> = glob_patterns
             .iter()
             .map(|p| format!(":(glob){}", p))
             .collect();
-        let output = std::process::Command::new("git")
-            .args(["ls-files", "--others", "--ignored", "--exclude-standard", "--"])
-            .args(&pathspecs)
-            .current_dir(root)
-            .output()
-            .context("failed to execute git ls-files")?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut args: Vec<&str> = vec![
+            "ls-files", "--others", "--ignored", "--exclude-standard", "--",
+        ];
+        args.extend(pathspecs.iter().map(|s| s.as_str()));
+        let stdout = git::git_output_in(root, &args)?;
         for file in stdout.lines() {
+            if !compiled.iter().any(|pat| pat.matches(file)) {
+                continue;
+            }
             let s = file.to_string();
             if seen.insert(s.clone()) {
                 candidates.push(s);
@@ -218,7 +225,8 @@ pub fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>> {
         }
     }
 
-    // Literal entries: check against git check-ignore.
+    // Literal entries: use raw Command because git check-ignore exits 1
+    // when no paths match, which git_output_in treats as an error.
     if !literal_entries.is_empty() {
         let output = std::process::Command::new("git")
             .arg("check-ignore")

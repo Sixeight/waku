@@ -171,7 +171,17 @@ fn process_worktreeinclude(
         return Ok(());
     }
 
-    let files = collect_worktreeinclude_files(root)?;
+    let pb = if !quiet {
+        let pb = spinner("Collecting .worktreeinclude files".to_string());
+        Some(pb)
+    } else {
+        None
+    };
+    let files = collect_worktreeinclude_files(root);
+    if let Some(pb) = pb {
+        pb.finish_and_clear();
+    }
+    let files = files?;
     if files.is_empty() {
         return Ok(());
     }
