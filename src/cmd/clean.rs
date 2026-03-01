@@ -227,13 +227,36 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         chosen
     };
 
-    // Remove worktrees sequentially (git worktree remove takes a lock)
-    for (path, branch) in &selected {
+    // Remove worktrees in parallel
+    let sp = {
+        let label = if selected.len() == 1 {
+            let (p, b) = &selected[0];
+            format!("Removing {}", display_name(p, b.as_deref()))
+        } else {
+            format!("Removing {} worktrees", selected.len())
+        };
+        spinner(label)
+    };
+    let root_ref = &root;
+    let results: Vec<_> = std::thread::scope(|s| {
+        let handles: Vec<_> = selected
+            .iter()
+            .map(|(path, branch)| {
+                s.spawn(move || {
+                    let result =
+                        git::git_output_in(root_ref, &["worktree", "remove", "--force", path]);
+                    (path, branch, result)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    sp.finish_and_clear();
+
+    for (path, branch, result) in results {
         let name = display_name(path, branch.as_deref());
-        let sp = spinner(format!("Removing {name}"));
-        match git::git_output_in(&root, &["worktree", "remove", "--force", path]) {
+        match result {
             Ok(_) => {
-                sp.finish_and_clear();
                 if let Some(b) = branch {
                     if let Err(e) = git::git_output_in(&root, &["branch", "-D", b]) {
                         print_warning(&format!("failed to delete branch '{b}'"), &e);
@@ -242,7 +265,6 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
                 eprintln!("  {} Removed {}", style("✔").green(), name);
             }
             Err(e) => {
-                sp.finish_and_clear();
                 eprintln!(
                     "  {} Failed to remove {}",
                     style("✘").red().bold(),
