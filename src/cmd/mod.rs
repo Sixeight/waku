@@ -176,8 +176,8 @@ pub fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>> {
     let wti_content = fs::read_to_string(&wti_path)
         .with_context(|| format!("failed to read {}", wti_path.display()))?;
 
-    let mut seen = HashSet::new();
-    let mut candidates = Vec::new();
+    let mut glob_patterns = Vec::new();
+    let mut literal_entries = Vec::new();
 
     for raw in wti_content.lines() {
         let line = raw.trim();
@@ -187,44 +187,55 @@ pub fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>> {
         let line = line.trim_end_matches('/');
 
         if is_glob_pattern(line) {
-            let pattern = format!("{}/{}", root.display(), line);
-            if let Ok(entries) = glob::glob(&pattern) {
-                for entry in entries.flatten() {
-                    if let Ok(rel) = entry.strip_prefix(root) {
-                        let s = rel.to_string_lossy().into_owned();
-                        if seen.insert(s.clone()) {
-                            candidates.push(s);
-                        }
-                    }
-                }
-            }
+            glob_patterns.push(line.to_string());
         } else if root.join(line).exists() {
-            let s = line.to_string();
+            literal_entries.push(line.to_string());
+        }
+    }
+
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+
+    // Glob patterns: delegate to git ls-files with pathspecs to avoid
+    // traversing large directories (e.g. node_modules/) ourselves.
+    if !glob_patterns.is_empty() {
+        let pathspecs: Vec<String> = glob_patterns
+            .iter()
+            .map(|p| format!(":(glob){}", p))
+            .collect();
+        let output = std::process::Command::new("git")
+            .args(["ls-files", "--others", "--ignored", "--exclude-standard", "--"])
+            .args(&pathspecs)
+            .current_dir(root)
+            .output()
+            .context("failed to execute git ls-files")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for file in stdout.lines() {
+            let s = file.to_string();
             if seen.insert(s.clone()) {
                 candidates.push(s);
             }
         }
     }
 
-    if candidates.is_empty() {
-        return Ok(vec![]);
+    // Literal entries: check against git check-ignore.
+    if !literal_entries.is_empty() {
+        let output = std::process::Command::new("git")
+            .arg("check-ignore")
+            .args(&literal_entries)
+            .current_dir(root)
+            .output()
+            .context("failed to execute git check-ignore")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let ignored: HashSet<&str> = stdout.lines().collect();
+        for entry in literal_entries {
+            if ignored.contains(entry.as_str()) && seen.insert(entry.clone()) {
+                candidates.push(entry);
+            }
+        }
     }
 
-    let output = std::process::Command::new("git")
-        .arg("check-ignore")
-        .args(&candidates)
-        .current_dir(root)
-        .output()
-        .context("failed to execute git check-ignore")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let ignored: HashSet<&str> = stdout.lines().collect();
-
-    Ok(candidates
-        .into_iter()
-        .filter(|name| ignored.contains(name.as_str()))
-        .map(PathBuf::from)
-        .collect())
+    Ok(candidates.into_iter().map(PathBuf::from).collect())
 }
 
 /// Extract values for a given config key.
