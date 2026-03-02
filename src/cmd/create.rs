@@ -39,9 +39,7 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
         });
         let wt_result = create_worktree(&root, &wt_path, branch, opts.from.as_deref(), opts.quiet);
 
-        // Spinner covers the wait if file collection outlasts worktree creation.
-        // Finishes instantly if the thread is already done.
-        let sp = if !opts.quiet {
+        let sp = if !opts.quiet && !wti_handle.is_finished() {
             Some(spinner("Collecting files".to_string()))
         } else {
             None
