@@ -243,9 +243,13 @@ fn run_post_create_hooks(
         if !quiet {
             eprintln!("  {} Running {}...", style("▸").cyan(), hook);
         }
-        let status = Command::new("sh")
-            .args(["-c", hook])
-            .current_dir(wt_path)
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", hook]).current_dir(wt_path);
+        if quiet {
+            cmd.stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+        }
+        let status = cmd
             .status()
             .with_context(|| format!("failed to run hook: {hook}"))?;
         if !quiet {

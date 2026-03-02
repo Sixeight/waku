@@ -166,6 +166,29 @@ fn create_runs_post_create_hook() {
 }
 
 #[test]
+fn create_quiet_suppresses_hook_output() {
+    let (_tmp, repo) = setup_repo();
+
+    run_git(
+        &repo,
+        &["config", "waku.hook.postCreate", "echo HOOK_STDOUT_MARKER"],
+    );
+
+    let result = git_waku::cmd::create::run(
+        "feature-quiet-hook",
+        git_waku::cmd::create::CreateOptions {
+            quiet: true,
+            root: Some(repo.clone()),
+            ..Default::default()
+        },
+    );
+    assert!(result.is_ok(), "create with quiet failed: {:?}", result.err());
+
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-quiet-hook");
+    assert!(wt_path.exists(), "worktree should be created");
+}
+
+#[test]
 fn create_with_from_ref() {
     let (_tmp, repo) = setup_repo();
 
