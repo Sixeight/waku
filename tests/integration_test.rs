@@ -1551,3 +1551,90 @@ fn create_with_existing_branch_ignores_from() {
         "should warn about --from being ignored: {stderr}"
     );
 }
+
+#[test]
+fn create_from_remote_branch_when_no_local_branch() {
+    let tmp = TempDir::new().expect("failed to create tempdir");
+
+    // Create a bare repository to act as "origin"
+    let bare = tmp.path().join("origin.git");
+    fs::create_dir(&bare).unwrap();
+    run_git(&bare, &["init", "--bare", "-b", "main"]);
+
+    // Create a working repo and push to the bare origin
+    let upstream = tmp.path().join("upstream");
+    fs::create_dir(&upstream).unwrap();
+    run_git(&upstream, &["init", "-b", "main"]);
+    run_git(&upstream, &["config", "user.email", "test@test.com"]);
+    run_git(&upstream, &["config", "user.name", "Test"]);
+    run_git(&upstream, &["config", "commit.gpgsign", "false"]);
+    fs::write(upstream.join("README.md"), "# test\n").unwrap();
+    run_git(&upstream, &["add", "."]);
+    run_git(&upstream, &["commit", "-m", "initial"]);
+    run_git(
+        &upstream,
+        &["remote", "add", "origin", bare.to_str().unwrap()],
+    );
+    run_git(&upstream, &["push", "origin", "main"]);
+
+    // Create a feature branch with a unique file and push it
+    run_git(&upstream, &["checkout", "-b", "remote-feature"]);
+    fs::write(upstream.join("remote-only.txt"), "from remote\n").unwrap();
+    run_git(&upstream, &["add", "."]);
+    run_git(&upstream, &["commit", "-m", "remote feature commit"]);
+    run_git(&upstream, &["push", "origin", "remote-feature"]);
+
+    // Clone the bare repo into our "local" repo (the one we'll run waku in)
+    let repo = tmp.path().join("myrepo");
+    run_git(
+        tmp.path(),
+        &["clone", bare.to_str().unwrap(), repo.to_str().unwrap()],
+    );
+    run_git(&repo, &["config", "user.email", "test@test.com"]);
+    run_git(&repo, &["config", "user.name", "Test"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+
+    // Verify local branch does NOT exist but remote tracking branch does
+    let local_check = Command::new("git")
+        .args(["rev-parse", "--verify", "refs/heads/remote-feature"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        !local_check.status.success(),
+        "local branch should not exist yet"
+    );
+    let remote_check = Command::new("git")
+        .args([
+            "rev-parse",
+            "--verify",
+            "refs/remotes/origin/remote-feature",
+        ])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        remote_check.status.success(),
+        "remote tracking branch should exist"
+    );
+
+    // Run git-waku create WITHOUT --from
+    let output = run_waku(&repo, &["create", "remote-feature"]);
+    assert!(
+        output.status.success(),
+        "git-waku create from remote branch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/remote-feature");
+    assert!(wt_path.exists(), "worktree should be created");
+
+    // The worktree should have the file from the remote branch
+    assert!(
+        wt_path.join("remote-only.txt").exists(),
+        "worktree should contain remote-only.txt from origin/remote-feature"
+    );
+}

@@ -110,14 +110,20 @@ fn create_worktree(
         }
         git::git_output_in(root, &["worktree", "add", &wt_path_str, branch])?;
     } else {
-        let base_ref = from.unwrap_or("HEAD");
+        let base_ref = if let Some(from_ref) = from {
+            from_ref.to_string()
+        } else if git::remote_branch_exists(root, branch) {
+            format!("origin/{branch}")
+        } else {
+            "HEAD".to_string()
+        };
         git::git_output_in(root, &[
             "worktree",
             "add",
             "-b",
             branch,
             &wt_path_str,
-            base_ref,
+            &base_ref,
         ])?;
     }
     if let Some(sp) = sp {
