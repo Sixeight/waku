@@ -1638,3 +1638,28 @@ fn create_from_remote_branch_when_no_local_branch() {
         "worktree should contain remote-only.txt from origin/remote-feature"
     );
 }
+
+#[test]
+fn open_auto_creates_worktree_when_missing() {
+    let (_tmp, repo) = setup_repo();
+
+    // Configure editor to a no-op command so open doesn't block
+    run_git(&repo, &["config", "waku.command.editor", "true"]);
+
+    // Worktree does not exist yet
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/auto-open");
+    assert!(!wt_path.exists());
+
+    // open should auto-create the worktree and succeed
+    let output = run_waku(&repo, &["open", "auto-open"]);
+    assert!(
+        output.status.success(),
+        "git-waku open should auto-create worktree: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(wt_path.exists(), "worktree should be created by open");
+}
