@@ -1510,3 +1510,44 @@ fn clean_dry_run_dirty_and_unchanged() {
         "should also show no changes when dirty and unchanged: {stdout}"
     );
 }
+
+#[test]
+fn create_with_existing_branch() {
+    let (_tmp, repo) = setup_repo();
+
+    // Create a branch without a worktree
+    run_git(&repo, &["branch", "existing-branch"]);
+
+    // Creating a worktree for the existing branch should succeed
+    let output = run_waku(&repo, &["create", "existing-branch"]);
+    assert!(
+        output.status.success(),
+        "create with existing branch should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/existing-branch");
+    assert!(wt_path.exists(), "worktree directory should exist");
+}
+
+#[test]
+fn create_with_existing_branch_ignores_from() {
+    let (_tmp, repo) = setup_repo();
+
+    // Create a branch without a worktree
+    run_git(&repo, &["branch", "existing-from"]);
+
+    // --from should be ignored for existing branches (with a warning)
+    let output = run_waku(&repo, &["create", "existing-from", "--from", "HEAD"]);
+    assert!(
+        output.status.success(),
+        "create with existing branch and --from should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--from"),
+        "should warn about --from being ignored: {stderr}"
+    );
+}

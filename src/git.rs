@@ -70,6 +70,10 @@ pub fn first_parent_commits(dir: &Path, ref_name: &str) -> HashSet<String> {
         .collect()
 }
 
+pub fn branch_exists(dir: &Path, branch: &str) -> bool {
+    git_output_in(dir, &["rev-parse", "--verify", &format!("refs/heads/{branch}")]).is_ok()
+}
+
 /// Check if a branch has diverged from main's first-parent line.
 /// `first_parents` should be pre-computed via `first_parent_commits`.
 pub fn has_branch_diverged(

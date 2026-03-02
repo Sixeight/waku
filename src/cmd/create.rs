@@ -101,15 +101,27 @@ fn create_worktree(
     } else {
         Some(spinner(format!("Creating worktree {branch}")))
     };
-    let base_ref = from.unwrap_or("HEAD");
-    git::git_output_in(root, &[
-        "worktree",
-        "add",
-        "-b",
-        branch,
-        &wt_path.to_string_lossy(),
-        base_ref,
-    ])?;
+    let wt_path_str = wt_path.to_string_lossy();
+    if git::branch_exists(root, branch) {
+        if from.is_some() && !quiet {
+            eprintln!(
+                "  {} Branch {} already exists, --from is ignored",
+                style("⚠").yellow(),
+                style(branch).bold(),
+            );
+        }
+        git::git_output_in(root, &["worktree", "add", &wt_path_str, branch])?;
+    } else {
+        let base_ref = from.unwrap_or("HEAD");
+        git::git_output_in(root, &[
+            "worktree",
+            "add",
+            "-b",
+            branch,
+            &wt_path_str,
+            base_ref,
+        ])?;
+    }
     if let Some(sp) = sp {
         sp.finish_and_clear();
     }
