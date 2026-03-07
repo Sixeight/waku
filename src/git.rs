@@ -82,6 +82,17 @@ pub fn remote_branch_exists(dir: &Path, branch: &str) -> bool {
     .is_ok()
 }
 
+/// Check if a branch's upstream tracking ref has been deleted (gone).
+/// Returns true only when the branch has a configured remote but the
+/// corresponding refs/remotes/origin/<branch> no longer exists.
+pub fn has_upstream_gone(dir: &Path, branch: &str) -> bool {
+    let remote = git_output_in(dir, &["config", &format!("branch.{branch}.remote")]);
+    match remote {
+        Ok(r) if !r.is_empty() => !remote_branch_exists(dir, branch),
+        _ => false,
+    }
+}
+
 /// Check if a branch has diverged from main's first-parent line.
 /// `first_parents` should be pre-computed via `first_parent_commits`.
 pub fn has_branch_diverged(

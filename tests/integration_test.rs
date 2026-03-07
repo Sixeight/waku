@@ -4,6 +4,45 @@ use std::process::Command;
 
 use tempfile::TempDir;
 
+/// Create a temporary git repository with an initial commit and a bare remote "origin".
+/// Returns (TempDir, repo_path, bare_path).
+fn setup_repo_with_remote() -> (TempDir, PathBuf, PathBuf) {
+    let tmp = TempDir::new().expect("failed to create tempdir");
+
+    // Create bare repo as origin
+    let bare = tmp.path().join("origin.git");
+    fs::create_dir(&bare).unwrap();
+    run_git(&bare, &["init", "--bare", "-b", "main"]);
+
+    // Create working repo, push initial commit
+    let upstream = tmp.path().join("upstream");
+    fs::create_dir(&upstream).unwrap();
+    run_git(&upstream, &["init", "-b", "main"]);
+    run_git(&upstream, &["config", "user.email", "test@test.com"]);
+    run_git(&upstream, &["config", "user.name", "Test"]);
+    run_git(&upstream, &["config", "commit.gpgsign", "false"]);
+    fs::write(upstream.join("README.md"), "# test\n").unwrap();
+    run_git(&upstream, &["add", "."]);
+    run_git(&upstream, &["commit", "-m", "initial"]);
+    run_git(
+        &upstream,
+        &["remote", "add", "origin", bare.to_str().unwrap()],
+    );
+    run_git(&upstream, &["push", "origin", "main"]);
+
+    // Clone into the repo we'll actually use
+    let repo = tmp.path().join("myrepo");
+    run_git(
+        tmp.path(),
+        &["clone", bare.to_str().unwrap(), repo.to_str().unwrap()],
+    );
+    run_git(&repo, &["config", "user.email", "test@test.com"]);
+    run_git(&repo, &["config", "user.name", "Test"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+
+    (tmp, repo, bare)
+}
+
 /// Create a temporary git repository with an initial commit.
 fn setup_repo() -> (TempDir, PathBuf) {
     let tmp = TempDir::new().expect("failed to create tempdir");
@@ -400,6 +439,16 @@ fn clean_removes_merged_worktrees() {
     );
 
     assert!(!wt_path.exists(), "merged worktree should be removed");
+
+    let branch_check = Command::new("git")
+        .args(["rev-parse", "--verify", "refs/heads/feature-merged"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        !branch_check.status.success(),
+        "branch should be deleted after clean"
+    );
 }
 
 #[test]
@@ -675,6 +724,53 @@ fn clean_removes_squash_merged_worktrees() {
         !wt_path.exists(),
         "squash-merged worktree should be removed"
     );
+
+    let branch_check = Command::new("git")
+        .args(["rev-parse", "--verify", "refs/heads/feature-squash"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        !branch_check.status.success(),
+        "branch should be deleted after clean (squash merge)"
+    );
+}
+
+#[test]
+fn clean_deletes_branches_for_multiple_merged_worktrees() {
+    let (_tmp, repo) = setup_repo();
+
+    let base = repo.parent().unwrap().join("myrepo-worktrees");
+    for i in 1..=5 {
+        let name = format!("feature-branch-del-{i}");
+        run_waku(&repo, &["create", &name]);
+        let wt_path = base.join(&name);
+        fs::write(wt_path.join("feature.txt"), format!("feature {i}\n")).unwrap();
+        run_git(&wt_path, &["add", "."]);
+        run_git(&wt_path, &["commit", "-m", &format!("add feature {i}")]);
+        run_git(&repo, &["merge", "--no-ff", &name]);
+    }
+
+    let output = run_waku(&repo, &["clean", "--yes"]);
+    assert!(
+        output.status.success(),
+        "git-waku clean failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    for i in 1..=5 {
+        let name = format!("feature-branch-del-{i}");
+        assert!(!base.join(&name).exists(), "worktree {name} should be removed");
+        let branch_check = Command::new("git")
+            .args(["rev-parse", "--verify", &format!("refs/heads/{name}")])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            !branch_check.status.success(),
+            "branch {name} should be deleted after clean"
+        );
+    }
 }
 
 #[test]
@@ -1685,4 +1781,131 @@ fn open_auto_creates_worktree_when_missing() {
     );
 
     assert!(wt_path.exists(), "worktree should be created by open");
+}
+
+// --- Gone branch (closed PR) tests ---
+
+#[test]
+fn clean_removes_gone_branch_worktree() {
+    let (_tmp, repo, bare) = setup_repo_with_remote();
+
+    // Create a worktree with a branch that tracks origin
+    run_waku(&repo, &["create", "feature-gone"]);
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-gone");
+    fs::write(wt_path.join("feature.txt"), "feature\n").unwrap();
+    run_git(&wt_path, &["add", "."]);
+    run_git(&wt_path, &["commit", "-m", "add feature"]);
+    run_git(&wt_path, &["push", "-u", "origin", "feature-gone"]);
+
+    // Delete the remote branch (simulating closed PR)
+    run_git(&bare, &["branch", "-D", "feature-gone"]);
+
+    let output = run_waku(&repo, &["clean", "--yes"]);
+    assert!(
+        output.status.success(),
+        "git-waku clean failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        !wt_path.exists(),
+        "gone branch worktree should be removed"
+    );
+
+    // Branch should also be deleted
+    let branch_check = Command::new("git")
+        .args(["rev-parse", "--verify", "refs/heads/feature-gone"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        !branch_check.status.success(),
+        "branch should be deleted after clean"
+    );
+}
+
+#[test]
+fn clean_dry_run_shows_closed_label() {
+    let (_tmp, repo, bare) = setup_repo_with_remote();
+
+    run_waku(&repo, &["create", "feature-closed"]);
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-closed");
+    fs::write(wt_path.join("feature.txt"), "feature\n").unwrap();
+    run_git(&wt_path, &["add", "."]);
+    run_git(&wt_path, &["commit", "-m", "closed feature"]);
+    run_git(&wt_path, &["push", "-u", "origin", "feature-closed"]);
+
+    // Delete remote branch
+    run_git(&bare, &["branch", "-D", "feature-closed"]);
+
+    let output = run_waku(&repo, &["clean", "--dry-run"]);
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("closed"),
+        "dry-run should show 'closed' label: {stdout}"
+    );
+    assert!(
+        wt_path.exists(),
+        "dry-run should not remove worktree"
+    );
+}
+
+#[test]
+fn clean_does_not_remove_local_only_branch() {
+    let (_tmp, repo, _bare) = setup_repo_with_remote();
+
+    // Create a worktree but do NOT push (no upstream tracking)
+    run_waku(&repo, &["create", "feature-local-only"]);
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-local-only");
+    fs::write(wt_path.join("local.txt"), "local\n").unwrap();
+    run_git(&wt_path, &["add", "."]);
+    run_git(&wt_path, &["commit", "-m", "local only"]);
+
+    let output = run_waku(&repo, &["clean", "--yes"]);
+    assert!(output.status.success());
+
+    assert!(
+        wt_path.exists(),
+        "local-only branch should NOT be removed as gone"
+    );
+}
+
+#[test]
+fn clean_gone_dirty_is_skipped_with_yes() {
+    let (_tmp, repo, bare) = setup_repo_with_remote();
+
+    run_waku(&repo, &["create", "feature-gone-dirty"]);
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-gone-dirty");
+    fs::write(wt_path.join("feature.txt"), "feature\n").unwrap();
+    run_git(&wt_path, &["add", "."]);
+    run_git(&wt_path, &["commit", "-m", "add feature"]);
+    run_git(&wt_path, &["push", "-u", "origin", "feature-gone-dirty"]);
+
+    // Delete remote branch
+    run_git(&bare, &["branch", "-D", "feature-gone-dirty"]);
+
+    // Make the worktree dirty
+    fs::write(wt_path.join("dirty.txt"), "dirty\n").unwrap();
+
+    let output = run_waku(&repo, &["clean", "--yes"]);
+    assert!(output.status.success());
+
+    assert!(
+        wt_path.exists(),
+        "dirty gone worktree should be skipped with --yes"
+    );
 }

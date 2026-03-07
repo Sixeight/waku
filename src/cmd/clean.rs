@@ -6,6 +6,13 @@ use console::{style, truncate_str, Key, Term};
 use super::{cleanup_empty_dirs, print_warning, spinner};
 use crate::{git, worktree};
 
+struct WorktreeAnnotations<'a> {
+    dirty: &'a HashSet<String>,
+    unchanged: &'a HashSet<String>,
+    gone: &'a HashSet<String>,
+    commits: &'a HashMap<String, String>,
+}
+
 pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     let root = worktree::repo_root()?;
 
@@ -18,7 +25,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     // Slow operations in parallel (fetch is network I/O)
     let sp = spinner("Fetching remote".into());
     let (_fetch_result, worktrees) = std::thread::scope(|s| {
-        let fetch_handle = s.spawn(|| git::git_output_in(&root, &["fetch"]));
+        let fetch_handle = s.spawn(|| git::git_output_in(&root, &["fetch", "--prune"]));
         let wt_handle = s.spawn(|| git::worktree_list(&root));
         (fetch_handle.join().unwrap(), wt_handle.join().unwrap())
     });
@@ -121,6 +128,41 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         to_remove.push((path.clone(), None));
     }
 
+    // Detect branches whose upstream tracking ref is gone (closed PR / deleted remote branch).
+    // Only check worktrees that haven't already been collected as merged/unchanged.
+    let already_collected: HashSet<String> = to_remove.iter().map(|(p, _)| p.clone()).collect();
+    let gone_candidates: Vec<_> = worktrees
+        .iter()
+        .filter(|(path, _)| path != &root_str && !already_collected.contains(path))
+        .filter_map(|(path, branch)| branch.as_ref().map(|b| (path.clone(), b.clone())))
+        .collect();
+
+    let gone_set: HashSet<String> = std::thread::scope(|s| {
+        let handles: Vec<_> = gone_candidates
+            .iter()
+            .map(|(path, branch)| {
+                s.spawn(|| {
+                    let gone = git::has_upstream_gone(&root, branch);
+                    (path.clone(), gone)
+                })
+            })
+            .collect();
+        let mut set = HashSet::new();
+        for h in handles {
+            let (path, gone) = h.join().unwrap();
+            if gone {
+                set.insert(path);
+            }
+        }
+        set
+    });
+
+    for (path, branch) in &gone_candidates {
+        if gone_set.contains(path) {
+            to_remove.push((path.clone(), Some(branch.clone())));
+        }
+    }
+
     // Dirty check + commit info in parallel
     let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
     let (dirty_set, commit_info): (HashSet<String>, HashMap<String, String>) =
@@ -155,14 +197,22 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
 
     // Summary of found worktrees
     let unchanged_count = unchanged_set.len();
+    let closed_count = gone_set.len();
     let merged_count = to_remove
         .iter()
-        .filter(|(path, b)| b.is_some() && !unchanged_set.contains(path))
+        .filter(|(path, b)| {
+            b.is_some()
+                && !unchanged_set.contains(path)
+                && !gone_set.contains(path)
+        })
         .count();
     let detached_count = detached.len();
     let mut found_parts = Vec::new();
     if merged_count > 0 {
         found_parts.push(format!("{merged_count} merged"));
+    }
+    if closed_count > 0 {
+        found_parts.push(format!("{closed_count} closed"));
     }
     if detached_count > 0 {
         found_parts.push(format!("{detached_count} detached"));
@@ -171,7 +221,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         found_parts.push(format!("{unchanged_count} unchanged"));
     }
     if !found_parts.is_empty() {
-        let total = merged_count + detached_count + unchanged_count;
+        let total = merged_count + closed_count + detached_count + unchanged_count;
         let wt_word = if total == 1 {
             "worktree"
         } else {
@@ -189,10 +239,17 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         return Ok(());
     }
 
+    let annotations = WorktreeAnnotations {
+        dirty: &dirty_set,
+        unchanged: &unchanged_set,
+        gone: &gone_set,
+        commits: &commit_info,
+    };
+
     if dry_run {
         println!("Worktrees to remove:");
         for (path, branch) in &to_remove {
-            let label = worktree_label(path, branch.as_deref(), &dirty_set, &unchanged_set, &commit_info);
+            let label = worktree_label(path, branch.as_deref(), &annotations);
             println!("  {label}");
         }
         return Ok(());
@@ -219,7 +276,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
             .cloned()
             .collect()
     } else {
-        let chosen = select_worktrees(&to_remove, &dirty_set, &unchanged_set, &commit_info)?;
+        let chosen = select_worktrees(&to_remove, &annotations)?;
         if chosen.is_empty() {
             println!("Aborted.");
             return Ok(());
@@ -287,21 +344,19 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
 
 fn select_worktrees(
     items: &[(String, Option<String>)],
-    dirty_set: &HashSet<String>,
-    unchanged_set: &HashSet<String>,
-    commit_info: &HashMap<String, String>,
+    ann: &WorktreeAnnotations,
 ) -> Result<Vec<(String, Option<String>)>> {
     let term = Term::stderr();
     let count = items.len();
     let mut checked: Vec<bool> = items
         .iter()
-        .map(|(path, _)| !dirty_set.contains(path) && !unchanged_set.contains(path))
+        .map(|(path, _)| !ann.dirty.contains(path) && !ann.unchanged.contains(path))
         .collect();
     let mut cursor = count;
     let lines = count + 2;
 
     term.hide_cursor()?;
-    draw_selector(&term, items, &checked, dirty_set, unchanged_set, commit_info, cursor);
+    draw_selector(&term, items, &checked, ann, cursor);
 
     let result = loop {
         match term.read_key()? {
@@ -324,7 +379,7 @@ fn select_worktrees(
             _ => continue,
         }
         term.clear_last_lines(lines)?;
-        draw_selector(&term, items, &checked, dirty_set, unchanged_set, commit_info, cursor);
+        draw_selector(&term, items, &checked, ann, cursor);
     };
     term.show_cursor()?;
     result
@@ -334,14 +389,12 @@ fn draw_selector(
     term: &Term,
     items: &[(String, Option<String>)],
     checked: &[bool],
-    dirty_set: &HashSet<String>,
-    unchanged_set: &HashSet<String>,
-    commit_info: &HashMap<String, String>,
+    ann: &WorktreeAnnotations,
     cursor: usize,
 ) {
     let _ = term.write_line("Worktrees to remove:");
     for (i, (path, branch)) in items.iter().enumerate() {
-        let label = worktree_label(path, branch.as_deref(), dirty_set, unchanged_set, commit_info);
+        let label = worktree_label(path, branch.as_deref(), ann);
         let mark = if checked[i] { "✔" } else { " " };
         if cursor == i {
             let _ = term.write_line(&format!(
@@ -377,26 +430,32 @@ fn display_name(path: &str, branch: Option<&str>) -> String {
 fn worktree_label(
     path: &str,
     branch: Option<&str>,
-    dirty_set: &HashSet<String>,
-    unchanged_set: &HashSet<String>,
-    commit_info: &HashMap<String, String>,
+    ann: &WorktreeAnnotations,
 ) -> String {
     let name = display_name(path, branch);
-    let mut parts: Vec<String> = Vec::new();
-    if dirty_set.contains(path) {
-        parts.push("dirty".to_string());
-    }
-    if unchanged_set.contains(path) {
-        parts.push("no changes".to_string());
-    }
-    if let Some(info) = commit_info.get(path) {
-        parts.push(info.clone());
-    }
+    let parts = worktree_label_parts(path, ann);
     if parts.is_empty() {
         name
     } else {
         format!("{name} ({})", parts.join(", "))
     }
+}
+
+fn worktree_label_parts(path: &str, ann: &WorktreeAnnotations) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if ann.dirty.contains(path) {
+        parts.push("dirty".to_string());
+    }
+    if ann.gone.contains(path) {
+        parts.push("closed".to_string());
+    }
+    if ann.unchanged.contains(path) {
+        parts.push("no changes".to_string());
+    }
+    if let Some(info) = ann.commits.get(path) {
+        parts.push(info.clone());
+    }
+    parts
 }
 
 fn parse_branch_list(output: &str, exclude: &str) -> Vec<String> {
