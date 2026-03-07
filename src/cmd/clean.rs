@@ -249,7 +249,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     if dry_run {
         println!("Worktrees to remove:");
         for (path, branch) in &to_remove {
-            let label = worktree_label(path, branch.as_deref(), &annotations);
+            let label = styled_worktree_label(path, branch.as_deref(), &annotations);
             println!("  {label}");
         }
         return Ok(());
@@ -394,14 +394,14 @@ fn draw_selector(
 ) {
     let _ = term.write_line("Worktrees to remove:");
     for (i, (path, branch)) in items.iter().enumerate() {
-        let label = worktree_label(path, branch.as_deref(), ann);
+        let label = styled_worktree_label(path, branch.as_deref(), ann);
         let mark = if checked[i] { "✔" } else { " " };
         if cursor == i {
             let _ = term.write_line(&format!(
                 "  {} [{}] {}",
                 style("▸").bold(),
                 mark,
-                style(&label).bold()
+                label
             ));
         } else {
             let _ = term.write_line(&format!("    [{}] {}", mark, label));
@@ -427,18 +427,24 @@ fn display_name(path: &str, branch: Option<&str>) -> String {
     })
 }
 
-fn worktree_label(
+fn styled_worktree_label(
     path: &str,
     branch: Option<&str>,
     ann: &WorktreeAnnotations,
 ) -> String {
-    let name = display_name(path, branch);
+    let name = styled_display_name(path, branch);
     let parts = worktree_label_parts(path, ann);
     if parts.is_empty() {
         name
     } else {
-        format!("{name} ({})", parts.join(", "))
+        format!("{name} | {}", parts.join(", "))
     }
+}
+
+fn styled_display_name(path: &str, branch: Option<&str>) -> String {
+    branch
+        .map(|b| style(b).bold().to_string())
+        .unwrap_or_else(|| display_name(path, branch))
 }
 
 fn worktree_label_parts(path: &str, ann: &WorktreeAnnotations) -> Vec<String> {
@@ -469,4 +475,58 @@ fn parse_branch_list(output: &str, exclude: &str) -> Vec<String> {
         })
         .filter(|b| b != exclude && !b.is_empty())
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use console::set_colors_enabled;
+
+    #[test]
+    fn worktree_label_separates_name_from_annotations() {
+        let path = "/tmp/myrepo-worktrees/sixeight/trace-improvement";
+        let dirty = HashSet::from([path.to_string()]);
+        let unchanged = HashSet::from([path.to_string()]);
+        let gone = HashSet::new();
+        let commits = HashMap::from([(
+            path.to_string(),
+            "26 hours ago: fix(android): readable log copy".to_string(),
+        )]);
+        let annotations = WorktreeAnnotations {
+            dirty: &dirty,
+            unchanged: &unchanged,
+            gone: &gone,
+            commits: &commits,
+        };
+
+        set_colors_enabled(false);
+        assert_eq!(
+            styled_worktree_label(path, Some("sixeight/trace-improvement"), &annotations),
+            "sixeight/trace-improvement | dirty, no changes, 26 hours ago: fix(android): readable log copy"
+        );
+    }
+
+    #[test]
+    fn styled_worktree_label_bolds_branch_name() {
+        let path = "/tmp/myrepo-worktrees/sixeight/trace-improvement";
+        let dirty = HashSet::from([path.to_string()]);
+        let unchanged = HashSet::new();
+        let gone = HashSet::new();
+        let commits = HashMap::new();
+        let annotations = WorktreeAnnotations {
+            dirty: &dirty,
+            unchanged: &unchanged,
+            gone: &gone,
+            commits: &commits,
+        };
+
+        set_colors_enabled(true);
+        let label = styled_worktree_label(path, Some("sixeight/trace-improvement"), &annotations);
+        set_colors_enabled(false);
+
+        assert_eq!(
+            label,
+            "\u{1b}[1msixeight/trace-improvement\u{1b}[0m | dirty"
+        );
+    }
 }

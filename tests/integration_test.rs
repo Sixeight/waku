@@ -534,7 +534,7 @@ fn clean_dry_run_shows_dirty_worktrees() {
         "should show dirty worktree: {stdout}"
     );
     assert!(
-        stdout.contains("(dirty,"),
+        stdout.contains("feature-dry-dirty | dirty,"),
         "should mark dirty worktree with commit info: {stdout}"
     );
     assert!(
