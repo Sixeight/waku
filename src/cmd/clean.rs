@@ -284,48 +284,30 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         chosen
     };
 
-    // Remove worktrees in parallel
-    let sp = {
-        let label = if selected.len() == 1 {
-            let (p, b) = &selected[0];
-            format!("Removing {}", display_name(p, b.as_deref()))
-        } else {
-            format!("Removing {} worktrees", selected.len())
-        };
-        spinner(label)
-    };
-    let root_ref = &root;
-    let results: Vec<_> = std::thread::scope(|s| {
-        let handles: Vec<_> = selected
-            .iter()
-            .map(|(path, branch)| {
-                s.spawn(move || {
-                    let result =
-                        git::git_output_in(root_ref, &["worktree", "remove", "--force", path]);
-                    (path, branch, result)
-                })
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
-    });
-    sp.finish_and_clear();
+    // `git worktree remove` takes the repository lock, so surfacing per-worktree
+    // progress is more useful than spawning concurrent removals here.
+    let total = selected.len();
+    for (index, (path, branch)) in selected.into_iter().enumerate() {
+        let name = display_name(&path, branch.as_deref());
+        let progress = format!("{name} ({}/{total})", index + 1);
+        let sp = spinner(format!("Removing {progress}"));
+        let result = git::git_output_in(&root, &["worktree", "remove", "--force", &path]);
+        sp.finish_and_clear();
 
-    for (path, branch, result) in results {
-        let name = display_name(path, branch.as_deref());
         match result {
             Ok(_) => {
-                if let Some(b) = branch {
+                if let Some(ref b) = branch {
                     if let Err(e) = git::git_output_in(&root, &["branch", "-D", b]) {
                         print_warning(&format!("failed to delete branch '{b}'"), &e);
                     }
                 }
-                eprintln!("  {} Removed {}", style("✔").green(), name);
+                eprintln!("  {} Removed {}", style("✔").green(), progress);
             }
             Err(e) => {
                 eprintln!(
                     "  {} Failed to remove {}",
                     style("✘").red().bold(),
-                    name
+                    progress
                 );
                 let err = anyhow::anyhow!("failed to remove worktree: {e}");
                 print_warning(&format!("failed to remove worktree '{name}'"), &err);

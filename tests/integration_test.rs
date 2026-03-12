@@ -774,6 +774,39 @@ fn clean_deletes_branches_for_multiple_merged_worktrees() {
 }
 
 #[test]
+fn clean_yes_reports_per_worktree_progress() {
+    let (_tmp, repo) = setup_repo();
+
+    let base = repo.parent().unwrap().join("myrepo-worktrees");
+    for i in 1..=2 {
+        let name = format!("feature-progress-{i}");
+        run_waku(&repo, &["create", &name]);
+        let wt_path = base.join(&name);
+        fs::write(wt_path.join("feature.txt"), format!("feature {i}\n")).unwrap();
+        run_git(&wt_path, &["add", "."]);
+        run_git(&wt_path, &["commit", "-m", &format!("add feature {i}")]);
+        run_git(&repo, &["merge", "--no-ff", &name]);
+    }
+
+    let output = run_waku(&repo, &["clean", "--yes"]);
+    assert!(
+        output.status.success(),
+        "git-waku clean failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Removed feature-progress-1 (1/2)"),
+        "should report first completed worktree immediately: {stderr}"
+    );
+    assert!(
+        stderr.contains("Removed feature-progress-2 (2/2)"),
+        "should report second completed worktree with progress count: {stderr}"
+    );
+}
+
+#[test]
 fn clean_does_not_remove_multiple_undiverged() {
     let (_tmp, repo) = setup_repo();
 
