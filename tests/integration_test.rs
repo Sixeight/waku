@@ -1816,6 +1816,59 @@ fn open_auto_creates_worktree_when_missing() {
     assert!(wt_path.exists(), "worktree should be created by open");
 }
 
+#[test]
+fn create_ai_command_accepts_configured_arguments() {
+    let (_tmp, repo) = setup_repo();
+
+    run_git(&repo, &["config", "waku.command.ai", "touch configured-by-ai"]);
+
+    let output = run_waku(&repo, &["create", "feature-ai-config", "--ai"]);
+    assert!(
+        output.status.success(),
+        "git-waku create --ai should accept configured arguments: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-ai-config");
+    assert!(
+        wt_path.join("configured-by-ai").exists(),
+        "configured ai command should run inside the worktree"
+    );
+}
+
+#[test]
+fn open_ai_command_merges_configured_and_cli_arguments() {
+    let (_tmp, repo) = setup_repo();
+
+    run_git(
+        &repo,
+        &["config", "waku.command.ai", "touch from-config"],
+    );
+
+    let output = run_waku(&repo, &["open", "feature-open-ai", "--ai", "--", "from-cli"]);
+    assert!(
+        output.status.success(),
+        "git-waku open --ai should merge configured and CLI arguments: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-open-ai");
+    assert!(
+        wt_path.join("from-config").exists(),
+        "configured ai command should keep its configured arguments"
+    );
+    assert!(
+        wt_path.join("from-cli").exists(),
+        "open --ai should append CLI arguments after configured ones"
+    );
+}
+
 // --- Gone branch (closed PR) tests ---
 
 #[test]

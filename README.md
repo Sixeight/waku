@@ -144,6 +144,8 @@ Override the default commands for `--ai` and `--editor`:
 ```sh
 git config waku.command.ai claude      # default: claude
 git config waku.command.editor nvim    # default: nvim
+git config waku.command.ai "claude --resume"
+git config waku.command.ai "claude --append \"review this branch\""
 ```
 
 ### Post-create hooks (`waku.hook.postCreate`)

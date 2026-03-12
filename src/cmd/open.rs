@@ -18,7 +18,11 @@ pub fn run(branch: Option<&str>, ai: bool, args: &[String]) -> Result<()> {
     let root = worktree::repo_root()?;
     let config = git::config_get_regexp_in(&root, r"^waku\.")?;
     let tool = if ai { "ai" } else { "editor" };
-    let cmd = super::resolve_tool(&config, tool);
-    let args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let (cmd, configured_args) = super::resolve_tool_command(&config, tool)?;
+    let args: Vec<&str> = configured_args
+        .iter()
+        .map(|arg| arg.as_str())
+        .chain(args.iter().map(|arg| arg.as_str()))
+        .collect();
     git::exec_command(&cmd, &args, &dir)
 }

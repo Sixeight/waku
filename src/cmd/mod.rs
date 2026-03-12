@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::{git, worktree};
@@ -128,7 +128,7 @@ pub fn print_warning(context: &str, error: &anyhow::Error) {
     );
 }
 
-/// Resolve the command for a tool from waku config, with defaults.
+/// Resolve the configured command line for a tool, with defaults.
 pub fn resolve_tool(config: &[(String, String)], tool: &str) -> String {
     let key = format!("waku.command.{tool}");
     config
@@ -139,6 +139,63 @@ pub fn resolve_tool(config: &[(String, String)], tool: &str) -> String {
             "ai" => "claude".to_string(),
             _ => "nvim".to_string(),
         })
+}
+
+/// Resolve the command and configured arguments for a tool.
+pub fn resolve_tool_command(config: &[(String, String)], tool: &str) -> Result<(String, Vec<String>)> {
+    let command_line = resolve_tool(config, tool);
+    parse_command_line(&command_line)
+}
+
+fn parse_command_line(command_line: &str) -> Result<(String, Vec<String>)> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut chars = command_line.chars().peekable();
+    let mut quote = None;
+
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(active_quote) => match ch {
+                '\\' if active_quote == '"' => {
+                    let Some(next) = chars.next() else {
+                        bail!("unterminated escape in command: {command_line}");
+                    };
+                    current.push(next);
+                }
+                q if q == active_quote => quote = None,
+                _ => current.push(ch),
+            },
+            None => match ch {
+                '\'' | '"' => quote = Some(ch),
+                '\\' => {
+                    let Some(next) = chars.next() else {
+                        bail!("unterminated escape in command: {command_line}");
+                    };
+                    current.push(next);
+                }
+                ch if ch.is_whitespace() => {
+                    if !current.is_empty() {
+                        args.push(std::mem::take(&mut current));
+                    }
+                }
+                _ => current.push(ch),
+            },
+        }
+    }
+
+    if let Some(active_quote) = quote {
+        bail!("unterminated quote {active_quote} in command: {command_line}");
+    }
+
+    if !current.is_empty() {
+        args.push(current);
+    }
+
+    let Some((program, args)) = args.split_first() else {
+        bail!("empty command is not allowed");
+    };
+
+    Ok((program.clone(), args.to_vec()))
 }
 
 /// The mode for handling `.worktreeinclude` entries.
@@ -456,6 +513,28 @@ mod tests {
         ];
         assert_eq!(resolve_tool(&config, "ai"), "aider");
         assert_eq!(resolve_tool(&config, "editor"), "vim");
+    }
+
+    #[test]
+    fn resolve_tool_command_splits_configured_arguments() {
+        let config = vec![(
+            "waku.command.ai".to_string(),
+            "claude --resume --model sonnet".to_string(),
+        )];
+        let (program, args) = resolve_tool_command(&config, "ai").unwrap();
+        assert_eq!(program, "claude");
+        assert_eq!(args, vec!["--resume", "--model", "sonnet"]);
+    }
+
+    #[test]
+    fn resolve_tool_command_preserves_quoted_arguments() {
+        let config = vec![(
+            "waku.command.ai".to_string(),
+            "claude --append \"hello world\"".to_string(),
+        )];
+        let (program, args) = resolve_tool_command(&config, "ai").unwrap();
+        assert_eq!(program, "claude");
+        assert_eq!(args, vec!["--append", "hello world"]);
     }
 
     #[test]

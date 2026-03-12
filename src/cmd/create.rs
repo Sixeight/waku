@@ -59,11 +59,13 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     run_post_create_hooks(&wt_path, &waku_config, opts.quiet)?;
 
     if opts.ai {
-        let cmd = super::resolve_tool(&waku_config, "ai");
-        git::exec_command(&cmd, &[], &wt_path)?;
+        let (cmd, args) = super::resolve_tool_command(&waku_config, "ai")?;
+        let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
+        git::exec_command(&cmd, &args, &wt_path)?;
     } else if opts.editor {
-        let cmd = super::resolve_tool(&waku_config, "editor");
-        git::exec_command(&cmd, &[], &wt_path)?;
+        let (cmd, args) = super::resolve_tool_command(&waku_config, "editor")?;
+        let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
+        git::exec_command(&cmd, &args, &wt_path)?;
     } else if !opts.quiet {
         eprintln!();
         eprintln!(
@@ -332,4 +334,3 @@ fn copy_entries_parallel(root: &Path, wt_path: &Path, names: &[&str], quiet: boo
         }
     }
 }
-
