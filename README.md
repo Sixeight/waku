@@ -21,7 +21,7 @@ Once installed, Git picks it up as `git waku`.
 ```sh
 git waku create my-feature
 git waku create my-feature --from origin/main   # branch from a specific ref
-git waku create my-feature --ai                 # create and open with Claude Code
+git waku create my-feature --agent               # create and open with Claude Code
 git waku create my-feature --editor             # create and open with Neovim
 ```
 
@@ -46,8 +46,8 @@ cd $(git waku path sixeight-feature)        # by directory name
 
 ```sh
 git waku open my-feature                    # launch Neovim
-git waku open my-feature --ai               # launch Claude Code
-git waku open my-feature --ai -- --resume   # pass args through to claude
+git waku open my-feature --agent             # launch Claude Code
+git waku open my-feature --agent -- --resume # pass args through to claude
 git waku open                               # open current directory
 ```
 
@@ -139,13 +139,13 @@ git config waku.worktreeinclude ignore      # do nothing
 
 ### Tool commands (`waku.command.*`)
 
-Override the default commands for `--ai` and `--editor`:
+Override the default commands for `--agent` and `--editor`:
 
 ```sh
-git config waku.command.ai claude      # default: claude
-git config waku.command.editor nvim    # default: nvim
-git config waku.command.ai "claude --resume"
-git config waku.command.ai "claude --append \"review this branch\""
+git config waku.command.agent claude      # default: claude
+git config waku.command.editor nvim       # default: nvim
+git config waku.command.agent "claude --resume"
+git config waku.command.agent "claude --append \"review this branch\""
 ```
 
 ### Post-create hooks (`waku.hook.postCreate`)

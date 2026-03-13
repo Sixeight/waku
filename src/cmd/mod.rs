@@ -136,7 +136,7 @@ pub fn resolve_tool(config: &[(String, String)], tool: &str) -> String {
         .find(|(k, _)| k == &key)
         .map(|(_, v)| v.clone())
         .unwrap_or_else(|| match tool {
-            "ai" => "claude".to_string(),
+            "agent" => "claude".to_string(),
             _ => "nvim".to_string(),
         })
 }
@@ -145,7 +145,7 @@ pub fn resolve_tool(config: &[(String, String)], tool: &str) -> String {
 pub fn resolve_tool_in(root: &Path, tool: &str) -> Result<String> {
     let key = format!("waku.command.{tool}");
     Ok(git::config_get_in(root, &key)?.unwrap_or_else(|| match tool {
-        "ai" => "claude".to_string(),
+        "agent" => "claude".to_string(),
         _ => "nvim".to_string(),
     }))
 }
@@ -530,27 +530,27 @@ mod tests {
     #[test]
     fn resolve_tool_defaults() {
         let config: Vec<(String, String)> = vec![];
-        assert_eq!(resolve_tool(&config, "ai"), "claude");
+        assert_eq!(resolve_tool(&config, "agent"), "claude");
         assert_eq!(resolve_tool(&config, "editor"), "nvim");
     }
 
     #[test]
     fn resolve_tool_from_config() {
         let config = vec![
-            ("waku.command.ai".to_string(), "aider".to_string()),
+            ("waku.command.agent".to_string(), "aider".to_string()),
             ("waku.command.editor".to_string(), "vim".to_string()),
         ];
-        assert_eq!(resolve_tool(&config, "ai"), "aider");
+        assert_eq!(resolve_tool(&config, "agent"), "aider");
         assert_eq!(resolve_tool(&config, "editor"), "vim");
     }
 
     #[test]
     fn resolve_tool_command_splits_configured_arguments() {
         let config = vec![(
-            "waku.command.ai".to_string(),
+            "waku.command.agent".to_string(),
             "claude --resume --model sonnet".to_string(),
         )];
-        let (program, args) = resolve_tool_command(&config, "ai").unwrap();
+        let (program, args) = resolve_tool_command(&config, "agent").unwrap();
         assert_eq!(program, "claude");
         assert_eq!(args, vec!["--resume", "--model", "sonnet"]);
     }
@@ -558,10 +558,10 @@ mod tests {
     #[test]
     fn resolve_tool_command_preserves_quoted_arguments() {
         let config = vec![(
-            "waku.command.ai".to_string(),
+            "waku.command.agent".to_string(),
             "claude --append \"hello world\"".to_string(),
         )];
-        let (program, args) = resolve_tool_command(&config, "ai").unwrap();
+        let (program, args) = resolve_tool_command(&config, "agent").unwrap();
         assert_eq!(program, "claude");
         assert_eq!(args, vec!["--append", "hello world"]);
     }
@@ -585,13 +585,13 @@ mod tests {
     fn resolve_tool_command_in_splits_configured_arguments_from_repo_root() {
         let repo = init_repo();
         let status = Command::new("git")
-            .args(["config", "waku.command.ai", "claude --resume --model sonnet"])
+            .args(["config", "waku.command.agent", "claude --resume --model sonnet"])
             .current_dir(repo.path())
             .status()
             .expect("failed to run git config");
         assert!(status.success(), "git config should succeed");
 
-        let (program, args) = resolve_tool_command_in(repo.path(), "ai").unwrap();
+        let (program, args) = resolve_tool_command_in(repo.path(), "agent").unwrap();
 
         assert_eq!(program, "claude");
         assert_eq!(args, vec!["--resume", "--model", "sonnet"]);

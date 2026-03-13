@@ -22,11 +22,11 @@ enum Command {
         branch: String,
 
         /// Open with Claude Code after creation
-        #[arg(short = 'a', long = "ai", conflicts_with = "editor")]
-        ai: bool,
+        #[arg(short = 'a', long = "agent", conflicts_with = "editor")]
+        agent: bool,
 
         /// Open with Neovim after creation
-        #[arg(short = 'e', long = "editor", conflicts_with = "ai")]
+        #[arg(short = 'e', long = "editor", conflicts_with = "agent")]
         editor: bool,
 
         /// Base ref to create the branch from
@@ -40,8 +40,8 @@ enum Command {
         branch: Option<String>,
 
         /// Open with Claude Code instead of Neovim
-        #[arg(short = 'a', long = "ai")]
-        ai: bool,
+        #[arg(short = 'a', long = "agent")]
+        agent: bool,
 
         /// Arguments passed through to the launched tool
         #[arg(last = true)]
@@ -94,20 +94,20 @@ fn main() {
     let result = match cli.command {
         Some(Command::Create {
             branch,
-            ai,
+            agent,
             editor,
             from,
         }) => cmd::create::run(
             &branch,
             cmd::create::CreateOptions {
-                ai,
+                agent,
                 editor,
                 from,
                 ..Default::default()
             },
         )
         .map(|_| ()),
-        Some(Command::Open { branch, ai, args }) => cmd::open::run(branch.as_deref(), ai, &args),
+        Some(Command::Open { branch, agent, args }) => cmd::open::run(branch.as_deref(), agent, &args),
         Some(Command::Path { branch }) => cmd::path::run(&branch),
         Some(Command::Remove {
             query,

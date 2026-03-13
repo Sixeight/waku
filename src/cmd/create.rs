@@ -12,7 +12,7 @@ use crate::{git, worktree};
 
 #[derive(Default)]
 pub struct CreateOptions {
-    pub ai: bool,
+    pub agent: bool,
     pub editor: bool,
     pub from: Option<String>,
     pub quiet: bool,
@@ -58,8 +58,8 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     apply_worktreeinclude(&root, &wt_path, wti_mode, wti_files?, opts.quiet)?;
     run_post_create_hooks(&wt_path, &waku_config, opts.quiet)?;
 
-    if opts.ai {
-        let (cmd, args) = super::resolve_tool_command_in(&root, "ai")?;
+    if opts.agent {
+        let (cmd, args) = super::resolve_tool_command_in(&root, "agent")?;
         let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
         git::exec_command(&cmd, &args, &wt_path)?;
     } else if opts.editor {
