@@ -59,11 +59,11 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     run_post_create_hooks(&wt_path, &waku_config, opts.quiet)?;
 
     if opts.ai {
-        let (cmd, args) = super::resolve_tool_command(&waku_config, "ai")?;
+        let (cmd, args) = super::resolve_tool_command_in(&root, "ai")?;
         let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
         git::exec_command(&cmd, &args, &wt_path)?;
     } else if opts.editor {
-        let (cmd, args) = super::resolve_tool_command(&waku_config, "editor")?;
+        let (cmd, args) = super::resolve_tool_command_in(&root, "editor")?;
         let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
         git::exec_command(&cmd, &args, &wt_path)?;
     } else if !opts.quiet {

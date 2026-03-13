@@ -16,9 +16,8 @@ pub fn run(branch: Option<&str>, ai: bool, args: &[String]) -> Result<()> {
         Err(e) => return Err(e),
     };
     let root = worktree::repo_root()?;
-    let config = git::config_get_regexp_in(&root, r"^waku\.")?;
     let tool = if ai { "ai" } else { "editor" };
-    let (cmd, configured_args) = super::resolve_tool_command(&config, tool)?;
+    let (cmd, configured_args) = super::resolve_tool_command_in(&root, tool)?;
     let args: Vec<&str> = configured_args
         .iter()
         .map(|arg| arg.as_str())

@@ -60,6 +60,23 @@ pub fn config_get_regexp(pattern: &str) -> Result<Vec<(String, String)>> {
     config_get_regexp_in(&std::env::current_dir()?, pattern)
 }
 
+/// Read the effective value for a git config key in a specific directory.
+pub fn config_get_in(dir: &Path, key: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .args(["config", "--get", key])
+        .current_dir(dir)
+        .output()
+        .with_context(|| format!("failed to execute: git config --get {key}"))?;
+    if !output.status.success() {
+        if output.status.code() == Some(1) {
+            return Ok(None);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git config --get {key} failed: {}", stderr.trim());
+    }
+    Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_string()))
+}
+
 /// Load the first-parent commit hashes of `ref_name` into a HashSet.
 /// Called once, then shared across all branch divergence checks.
 pub fn first_parent_commits(dir: &Path, ref_name: &str) -> HashSet<String> {
