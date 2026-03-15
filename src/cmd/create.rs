@@ -12,8 +12,8 @@ use crate::{git, worktree};
 
 #[derive(Default)]
 pub struct CreateOptions {
-    pub agent: bool,
-    pub editor: bool,
+    pub agent: Option<String>,
+    pub editor: Option<String>,
     pub from: Option<String>,
     pub quiet: bool,
     pub root: Option<PathBuf>,
@@ -58,12 +58,14 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     apply_worktreeinclude(&root, &wt_path, wti_mode, wti_files?, opts.quiet)?;
     run_post_create_hooks(&wt_path, &waku_config, opts.quiet)?;
 
-    if opts.agent {
-        let (cmd, args) = super::resolve_tool_command_in(&root, "agent")?;
+    if let Some(command_override) = opts.agent.as_deref() {
+        let (cmd, args) =
+            super::resolve_tool_command_with_override_in(&root, "agent", Some(command_override))?;
         let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
         git::exec_command(&cmd, &args, &wt_path)?;
-    } else if opts.editor {
-        let (cmd, args) = super::resolve_tool_command_in(&root, "editor")?;
+    } else if let Some(command_override) = opts.editor.as_deref() {
+        let (cmd, args) =
+            super::resolve_tool_command_with_override_in(&root, "editor", Some(command_override))?;
         let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
         git::exec_command(&cmd, &args, &wt_path)?;
     } else if !opts.quiet {

@@ -162,6 +162,18 @@ pub fn resolve_tool_command_in(root: &Path, tool: &str) -> Result<(String, Vec<S
     parse_command_line(&command_line)
 }
 
+/// Resolve the command for a tool, allowing a per-invocation override.
+pub fn resolve_tool_command_with_override_in(
+    root: &Path,
+    tool: &str,
+    command_override: Option<&str>,
+) -> Result<(String, Vec<String>)> {
+    match command_override {
+        Some("") | None => resolve_tool_command_in(root, tool),
+        Some(command_line) => parse_command_line(command_line),
+    }
+}
+
 fn parse_command_line(command_line: &str) -> Result<(String, Vec<String>)> {
     let mut args = Vec::new();
     let mut current = String::new();
@@ -595,6 +607,41 @@ mod tests {
 
         assert_eq!(program, "claude");
         assert_eq!(args, vec!["--resume", "--model", "sonnet"]);
+    }
+
+    #[test]
+    fn resolve_tool_command_with_override_in_prefers_cli_override() {
+        let repo = init_repo();
+        let status = Command::new("git")
+            .args(["config", "waku.command.agent", "claude --resume"])
+            .current_dir(repo.path())
+            .status()
+            .expect("failed to run git config");
+        assert!(status.success(), "git config should succeed");
+
+        let (program, args) =
+            resolve_tool_command_with_override_in(repo.path(), "agent", Some("codex --full-auto"))
+                .unwrap();
+
+        assert_eq!(program, "codex");
+        assert_eq!(args, vec!["--full-auto"]);
+    }
+
+    #[test]
+    fn resolve_tool_command_with_override_in_uses_config_for_empty_override() {
+        let repo = init_repo();
+        let status = Command::new("git")
+            .args(["config", "waku.command.editor", "hx --wait"])
+            .current_dir(repo.path())
+            .status()
+            .expect("failed to run git config");
+        assert!(status.success(), "git config should succeed");
+
+        let (program, args) =
+            resolve_tool_command_with_override_in(repo.path(), "editor", Some("")).unwrap();
+
+        assert_eq!(program, "hx");
+        assert_eq!(args, vec!["--wait"]);
     }
 
     #[test]
