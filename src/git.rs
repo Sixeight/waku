@@ -23,6 +23,11 @@ pub fn git_output_in(dir: &Path, args: &[&str]) -> Result<String> {
     parse_git_output(&output, args)
 }
 
+/// Run a git command with a specific working directory and ignore stdout.
+pub fn git_in(dir: &Path, args: &[&str]) -> Result<()> {
+    git_output_in(dir, args).map(|_| ())
+}
+
 fn parse_git_output(output: &std::process::Output, args: &[&str]) -> Result<String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

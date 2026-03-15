@@ -1900,6 +1900,119 @@ fn open_agent_command_merges_configured_and_cli_arguments() {
 }
 
 #[test]
+fn config_reads_local_value() {
+    let (_tmp, repo) = setup_repo();
+    run_git(&repo, &["config", "waku.command.agent", "claude"]);
+
+    let output = run_waku(&repo, &["config", "waku.command.agent"]);
+    assert!(
+        output.status.success(),
+        "git-waku config get failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "claude");
+}
+
+#[test]
+fn config_sets_local_value() {
+    let (_tmp, repo) = setup_repo();
+
+    let output = run_waku(&repo, &["config", "waku.command.agent", "aider"]);
+    assert!(
+        output.status.success(),
+        "git-waku config set failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value = Command::new("git")
+        .args(["config", "--local", "--get", "waku.command.agent"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(value.status.success(), "git config --get should succeed");
+    assert_eq!(String::from_utf8_lossy(&value.stdout).trim(), "aider");
+}
+
+#[test]
+fn config_adds_multi_value() {
+    let (_tmp, repo) = setup_repo();
+
+    let output = run_waku(&repo, &["config", "--add", "waku.link.include", "node_modules"]);
+    assert!(
+        output.status.success(),
+        "git-waku config --add failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = run_waku(&repo, &["config", "--add", "waku.link.include", "vendor"]);
+    assert!(
+        output.status.success(),
+        "git-waku config second --add failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let values = Command::new("git")
+        .args(["config", "--get-all", "waku.link.include"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(values.status.success(), "git config --get-all should succeed");
+    assert_eq!(
+        String::from_utf8_lossy(&values.stdout)
+            .lines()
+            .collect::<Vec<_>>(),
+        vec!["node_modules", "vendor"]
+    );
+}
+
+#[test]
+fn config_unsets_value() {
+    let (_tmp, repo) = setup_repo();
+    run_git(&repo, &["config", "waku.command.agent", "claude"]);
+
+    let output = run_waku(&repo, &["config", "--unset", "waku.command.agent"]);
+    assert!(
+        output.status.success(),
+        "git-waku config --unset failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value = Command::new("git")
+        .args(["config", "--local", "--get", "waku.command.agent"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert_eq!(value.status.code(), Some(1), "value should be unset");
+}
+
+#[test]
+fn config_sets_global_value() {
+    let (_tmp, repo) = setup_repo();
+    let home = repo.parent().unwrap().join("fake-home");
+    fs::create_dir(&home).unwrap();
+
+    let output = Command::new(git_waku_bin())
+        .args(["config", "--global", "waku.command.agent", "claude"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .expect("failed to run git-waku");
+    assert!(
+        output.status.success(),
+        "git-waku config --global failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value = Command::new("git")
+        .args(["config", "--global", "--get", "waku.command.agent"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(value.status.success(), "git config --global --get should succeed");
+    assert_eq!(String::from_utf8_lossy(&value.stdout).trim(), "claude");
+}
+
+#[test]
 fn open_editor_command_can_override_configured_command() {
     let (_tmp, repo) = setup_repo();
 

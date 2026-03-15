@@ -114,6 +114,26 @@ enum Command {
         #[arg(short, long)]
         force: bool,
     },
+    /// Read and write git-waku configuration
+    Config {
+        /// Use the global config file
+        #[arg(long = "global")]
+        global: bool,
+
+        /// Add a new value without replacing existing values
+        #[arg(long)]
+        add: bool,
+
+        /// Remove the value for a key
+        #[arg(long)]
+        unset: bool,
+
+        /// Config key
+        key: String,
+
+        /// Config value
+        value: Option<String>,
+    },
 }
 
 fn main() {
@@ -157,6 +177,13 @@ fn main() {
             Ok(())
         }
         Some(Command::Clean { dry_run, yes, force }) => cmd::clean::run(dry_run, yes, force),
+        Some(Command::Config {
+            global,
+            add,
+            unset,
+            key,
+            value,
+        }) => cmd::config::run(global, add, unset, &key, value.as_deref()),
         None => cmd::passthrough(&cli.args),
     };
 

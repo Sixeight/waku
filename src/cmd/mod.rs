@@ -1,4 +1,5 @@
 pub mod clean;
+pub mod config;
 pub mod create;
 pub mod open;
 pub mod path;
