@@ -1840,36 +1840,6 @@ fn create_agent_command_accepts_configured_arguments() {
 }
 
 #[test]
-fn create_agent_command_can_override_configured_command() {
-    let (_tmp, repo) = setup_repo();
-
-    run_git(&repo, &["config", "waku.command.agent", "touch from-config"]);
-
-    let output = run_waku(
-        &repo,
-        &["create", "feature-agent-override", "--agent", "touch from-override"],
-    );
-    assert!(
-        output.status.success(),
-        "git-waku create --agent <cmd> should override configured command: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let wt_path = repo
-        .parent()
-        .unwrap()
-        .join("myrepo-worktrees/feature-agent-override");
-    assert!(
-        !wt_path.join("from-config").exists(),
-        "configured agent command should not run when overridden"
-    );
-    assert!(
-        wt_path.join("from-override").exists(),
-        "override agent command should run inside the worktree"
-    );
-}
-
-#[test]
 fn open_agent_command_merges_configured_and_cli_arguments() {
     let (_tmp, repo) = setup_repo();
 
@@ -2011,37 +1981,6 @@ fn config_sets_global_value() {
     assert!(value.status.success(), "git config --global --get should succeed");
     assert_eq!(String::from_utf8_lossy(&value.stdout).trim(), "claude");
 }
-
-#[test]
-fn open_editor_command_can_override_configured_command() {
-    let (_tmp, repo) = setup_repo();
-
-    run_git(&repo, &["config", "waku.command.editor", "touch from-config"]);
-
-    let output = run_waku(
-        &repo,
-        &["open", "feature-editor-override", "--editor", "touch from-override"],
-    );
-    assert!(
-        output.status.success(),
-        "git-waku open --editor <cmd> should override configured command: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let wt_path = repo
-        .parent()
-        .unwrap()
-        .join("myrepo-worktrees/feature-editor-override");
-    assert!(
-        !wt_path.join("from-config").exists(),
-        "configured editor command should not run when overridden"
-    );
-    assert!(
-        wt_path.join("from-override").exists(),
-        "override editor command should run inside the worktree"
-    );
-}
-
 // --- Gone branch (closed PR) tests ---
 
 #[test]

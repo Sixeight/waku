@@ -22,24 +22,12 @@ enum Command {
         branch: String,
 
         /// Open with Claude Code after creation
-        #[arg(
-            short = 'a',
-            long = "agent",
-            conflicts_with = "editor",
-            num_args = 0..=1,
-            default_missing_value = ""
-        )]
-        agent: Option<String>,
+        #[arg(short = 'a', long = "agent", conflicts_with = "editor")]
+        agent: bool,
 
         /// Open with Neovim after creation
-        #[arg(
-            short = 'e',
-            long = "editor",
-            conflicts_with = "agent",
-            num_args = 0..=1,
-            default_missing_value = ""
-        )]
-        editor: Option<String>,
+        #[arg(short = 'e', long = "editor", conflicts_with = "agent")]
+        editor: bool,
 
         /// Base ref to create the branch from
         #[arg(long = "from")]
@@ -52,24 +40,8 @@ enum Command {
         branch: Option<String>,
 
         /// Open with Claude Code instead of Neovim
-        #[arg(
-            short = 'a',
-            long = "agent",
-            conflicts_with = "editor",
-            num_args = 0..=1,
-            default_missing_value = ""
-        )]
-        agent: Option<String>,
-
-        /// Open with editor explicitly
-        #[arg(
-            short = 'e',
-            long = "editor",
-            conflicts_with = "agent",
-            num_args = 0..=1,
-            default_missing_value = ""
-        )]
-        editor: Option<String>,
+        #[arg(short = 'a', long = "agent")]
+        agent: bool,
 
         /// Arguments passed through to the launched tool
         #[arg(last = true)]
@@ -155,12 +127,7 @@ fn main() {
             },
         )
         .map(|_| ()),
-        Some(Command::Open {
-            branch,
-            agent,
-            editor,
-            args,
-        }) => cmd::open::run(branch.as_deref(), agent, editor, &args),
+        Some(Command::Open { branch, agent, args }) => cmd::open::run(branch.as_deref(), agent, &args),
         Some(Command::Path { branch }) => cmd::path::run(&branch),
         Some(Command::Remove {
             query,
