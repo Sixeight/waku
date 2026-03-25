@@ -104,6 +104,10 @@ pub fn remote_branch_exists(dir: &Path, branch: &str) -> bool {
     .is_ok()
 }
 
+pub fn remote_default_branch_ref(dir: &Path) -> Result<String> {
+    git_output_in(dir, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+}
+
 /// Check if a branch's upstream tracking ref has been deleted (gone).
 /// Returns true only when the branch has a configured remote but the
 /// corresponding refs/remotes/origin/<branch> no longer exists.

@@ -32,6 +32,14 @@ enum Command {
         /// Base ref to create the branch from
         #[arg(long = "from")]
         from: Option<String>,
+
+        /// Fetch origin before creating the worktree
+        #[arg(long = "fetch")]
+        fetch: bool,
+
+        /// Create from origin's default branch
+        #[arg(long = "from-default-branch", conflicts_with = "from")]
+        from_default_branch: bool,
     },
     /// Open a worktree in Neovim or Claude Code
     #[command(alias = "use")]
@@ -117,12 +125,16 @@ fn main() {
             agent,
             editor,
             from,
+            fetch,
+            from_default_branch,
         }) => cmd::create::run(
             &branch,
             cmd::create::CreateOptions {
                 agent,
                 editor,
                 from,
+                fetch,
+                from_default_branch,
                 ..Default::default()
             },
         )

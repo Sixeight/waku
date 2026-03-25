@@ -14,7 +14,9 @@ use crate::{git, worktree};
 pub struct CreateOptions {
     pub agent: bool,
     pub editor: bool,
+    pub fetch: bool,
     pub from: Option<String>,
+    pub from_default_branch: bool,
     pub quiet: bool,
     pub root: Option<PathBuf>,
 }
@@ -27,6 +29,21 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
     let wt_path = worktree::worktree_path_with_config(&root, branch, &waku_config)?;
 
+    if opts.fetch {
+        let sp = if opts.quiet {
+            None
+        } else {
+            Some(spinner("Fetching origin".to_string()))
+        };
+        git::git_output_in(&root, &["fetch", "--prune", "origin"])?;
+        if let Some(sp) = sp {
+            sp.finish_and_clear();
+        }
+        if !opts.quiet {
+            eprintln!("  {} Fetched origin", style("✔").green());
+        }
+    }
+
     // Collect worktreeinclude files in parallel with worktree creation
     // since both only depend on root, not on wt_path.
     let wti_mode = WorktreeIncludeMode::from_config(&waku_config);
@@ -37,7 +54,14 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
             }
             collect_worktreeinclude_files(&root)
         });
-        let wt_result = create_worktree(&root, &wt_path, branch, opts.from.as_deref(), opts.quiet);
+        let wt_result = create_worktree(
+            &root,
+            &wt_path,
+            branch,
+            opts.from.as_deref(),
+            opts.from_default_branch,
+            opts.quiet,
+        );
 
         let sp = if !opts.quiet && !wti_handle.is_finished() {
             Some(spinner("Collecting files".to_string()))
@@ -83,6 +107,7 @@ fn create_worktree(
     wt_path: &Path,
     branch: &str,
     from: Option<&str>,
+    from_default_branch: bool,
     quiet: bool,
 ) -> Result<()> {
     if wt_path.exists() {
@@ -110,10 +135,20 @@ fn create_worktree(
                 style(branch).bold(),
             );
         }
+        if from_default_branch && !quiet {
+            eprintln!(
+                "  {} Branch {} already exists, --from-default-branch is ignored",
+                style("⚠").yellow(),
+                style(branch).bold(),
+            );
+        }
         git::git_output_in(root, &["worktree", "add", &wt_path_str, branch])?;
     } else {
         let base_ref = if let Some(from_ref) = from {
             from_ref.to_string()
+        } else if from_default_branch {
+            git::remote_default_branch_ref(root)
+                .context("could not resolve origin/HEAD; run git fetch origin or pass --from")?
         } else if git::remote_branch_exists(root, branch) {
             format!("origin/{branch}")
         } else {

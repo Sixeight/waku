@@ -1387,7 +1387,6 @@ fn create_worktreeinclude_only_copies_gitignored_files() {
     let output = run_waku(&repo, &["create", "feature-wti-tracked"]);
     assert!(output.status.success());
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-wti-tracked");
     let stderr = String::from_utf8_lossy(&output.stderr);
     // tracked.txt should exist from git checkout, not from waku copy
     // The key point: it should NOT be reported as "Copied" in stderr
@@ -1788,6 +1787,99 @@ fn create_from_remote_branch_when_no_local_branch() {
     assert!(
         wt_path.join("remote-only.txt").exists(),
         "worktree should contain remote-only.txt from origin/remote-feature"
+    );
+}
+
+#[test]
+fn create_with_fetch_updates_remote_tracking_branch() {
+    let tmp = TempDir::new().expect("failed to create tempdir");
+
+    let bare = tmp.path().join("origin.git");
+    fs::create_dir(&bare).unwrap();
+    run_git(&bare, &["init", "--bare", "-b", "main"]);
+
+    let upstream = tmp.path().join("upstream");
+    fs::create_dir(&upstream).unwrap();
+    run_git(&upstream, &["init", "-b", "main"]);
+    run_git(&upstream, &["config", "user.email", "test@test.com"]);
+    run_git(&upstream, &["config", "user.name", "Test"]);
+    run_git(&upstream, &["config", "commit.gpgsign", "false"]);
+    fs::write(upstream.join("README.md"), "# test\n").unwrap();
+    run_git(&upstream, &["add", "."]);
+    run_git(&upstream, &["commit", "-m", "initial"]);
+    run_git(
+        &upstream,
+        &["remote", "add", "origin", bare.to_str().unwrap()],
+    );
+    run_git(&upstream, &["push", "origin", "main"]);
+
+    let repo = tmp.path().join("myrepo");
+    run_git(
+        tmp.path(),
+        &["clone", bare.to_str().unwrap(), repo.to_str().unwrap()],
+    );
+    run_git(&repo, &["config", "user.email", "test@test.com"]);
+    run_git(&repo, &["config", "user.name", "Test"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+
+    run_git(&upstream, &["checkout", "-b", "fetched-feature"]);
+    fs::write(upstream.join("fetched.txt"), "from fetched remote\n").unwrap();
+    run_git(&upstream, &["add", "."]);
+    run_git(&upstream, &["commit", "-m", "fetched feature commit"]);
+    run_git(&upstream, &["push", "origin", "fetched-feature"]);
+
+    let output = run_waku(&repo, &["create", "fetched-feature", "--fetch"]);
+    assert!(
+        output.status.success(),
+        "git-waku create --fetch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/fetched-feature");
+    assert!(wt_path.exists(), "worktree should be created");
+    assert!(
+        wt_path.join("fetched.txt").exists(),
+        "worktree should contain fetched.txt from fetched origin/fetched-feature"
+    );
+}
+
+#[test]
+fn create_with_from_default_branch_uses_origin_head() {
+    let (_tmp, repo, bare) = setup_repo_with_remote();
+
+    let upstream = repo.parent().unwrap().join("upstream-next");
+    fs::create_dir(&upstream).unwrap();
+    run_git(
+        repo.parent().unwrap(),
+        &["clone", bare.to_str().unwrap(), upstream.to_str().unwrap()],
+    );
+    run_git(&upstream, &["config", "user.email", "test@test.com"]);
+    run_git(&upstream, &["config", "user.name", "Test"]);
+    run_git(&upstream, &["config", "commit.gpgsign", "false"]);
+
+    fs::write(upstream.join("default-branch.txt"), "from default branch\n").unwrap();
+    run_git(&upstream, &["add", "."]);
+    run_git(&upstream, &["commit", "-m", "advance main"]);
+    run_git(&upstream, &["push", "origin", "main"]);
+
+    run_git(&repo, &["fetch", "origin"]);
+    run_git(&repo, &["checkout", "-b", "local-base"]);
+
+    let output = run_waku(&repo, &["create", "from-default", "--from-default-branch"]);
+    assert!(
+        output.status.success(),
+        "git-waku create --from-default-branch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/from-default");
+    assert!(wt_path.exists(), "worktree should be created");
+    assert!(
+        wt_path.join("default-branch.txt").exists(),
+        "worktree should contain default-branch.txt from origin/HEAD"
     );
 }
 
