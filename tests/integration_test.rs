@@ -1884,6 +1884,104 @@ fn create_with_from_default_branch_uses_origin_head() {
 }
 
 #[test]
+fn create_uses_fetch_config() {
+    let tmp = TempDir::new().expect("failed to create tempdir");
+
+    let bare = tmp.path().join("origin.git");
+    fs::create_dir(&bare).unwrap();
+    run_git(&bare, &["init", "--bare", "-b", "main"]);
+
+    let upstream = tmp.path().join("upstream");
+    fs::create_dir(&upstream).unwrap();
+    run_git(&upstream, &["init", "-b", "main"]);
+    run_git(&upstream, &["config", "user.email", "test@test.com"]);
+    run_git(&upstream, &["config", "user.name", "Test"]);
+    run_git(&upstream, &["config", "commit.gpgsign", "false"]);
+    fs::write(upstream.join("README.md"), "# test\n").unwrap();
+    run_git(&upstream, &["add", "."]);
+    run_git(&upstream, &["commit", "-m", "initial"]);
+    run_git(
+        &upstream,
+        &["remote", "add", "origin", bare.to_str().unwrap()],
+    );
+    run_git(&upstream, &["push", "origin", "main"]);
+
+    let repo = tmp.path().join("myrepo");
+    run_git(
+        tmp.path(),
+        &["clone", bare.to_str().unwrap(), repo.to_str().unwrap()],
+    );
+    run_git(&repo, &["config", "user.email", "test@test.com"]);
+    run_git(&repo, &["config", "user.name", "Test"]);
+    run_git(&repo, &["config", "commit.gpgsign", "false"]);
+    run_git(&repo, &["config", "waku.create.fetch", "true"]);
+
+    run_git(&upstream, &["checkout", "-b", "config-fetched-feature"]);
+    fs::write(upstream.join("config-fetched.txt"), "from fetched remote\n").unwrap();
+    run_git(&upstream, &["add", "."]);
+    run_git(&upstream, &["commit", "-m", "config fetched feature commit"]);
+    run_git(&upstream, &["push", "origin", "config-fetched-feature"]);
+
+    let output = run_waku(&repo, &["create", "config-fetched-feature"]);
+    assert!(
+        output.status.success(),
+        "git-waku create with waku.create.fetch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/config-fetched-feature");
+    assert!(wt_path.exists(), "worktree should be created");
+    assert!(
+        wt_path.join("config-fetched.txt").exists(),
+        "worktree should contain config-fetched.txt after config-driven fetch"
+    );
+}
+
+#[test]
+fn create_uses_from_default_branch_config() {
+    let (_tmp, repo, bare) = setup_repo_with_remote();
+
+    let upstream = repo.parent().unwrap().join("upstream-config");
+    fs::create_dir(&upstream).unwrap();
+    run_git(
+        repo.parent().unwrap(),
+        &["clone", bare.to_str().unwrap(), upstream.to_str().unwrap()],
+    );
+    run_git(&upstream, &["config", "user.email", "test@test.com"]);
+    run_git(&upstream, &["config", "user.name", "Test"]);
+    run_git(&upstream, &["config", "commit.gpgsign", "false"]);
+
+    fs::write(upstream.join("config-default-branch.txt"), "from default branch\n").unwrap();
+    run_git(&upstream, &["add", "."]);
+    run_git(&upstream, &["commit", "-m", "advance main from config"]);
+    run_git(&upstream, &["push", "origin", "main"]);
+
+    run_git(&repo, &["fetch", "origin"]);
+    run_git(&repo, &["checkout", "-b", "local-config-base"]);
+    run_git(&repo, &["config", "waku.create.from-default-branch", "true"]);
+
+    let output = run_waku(&repo, &["create", "from-default-config"]);
+    assert!(
+        output.status.success(),
+        "git-waku create with waku.create.from-default-branch failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/from-default-config");
+    assert!(wt_path.exists(), "worktree should be created");
+    assert!(
+        wt_path.join("config-default-branch.txt").exists(),
+        "worktree should contain config-default-branch.txt from origin/HEAD"
+    );
+}
+
+#[test]
 fn open_auto_creates_worktree_when_missing() {
     let (_tmp, repo) = setup_repo();
 

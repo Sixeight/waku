@@ -6,7 +6,8 @@ use anyhow::{Context, Result};
 use console::style;
 
 use super::{
-    collect_worktreeinclude_files, copy_recursive, remove_existing, spinner, WorktreeIncludeMode,
+    collect_worktreeinclude_files, config_bool, copy_recursive, remove_existing, spinner,
+    WorktreeIncludeMode,
 };
 use crate::{git, worktree};
 
@@ -28,8 +29,11 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     };
     let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
     let wt_path = worktree::worktree_path_with_config(&root, branch, &waku_config)?;
+    let fetch = opts.fetch || config_bool(&waku_config, "waku.create.fetch");
+    let from_default_branch = opts.from_default_branch
+        || (opts.from.is_none() && config_bool(&waku_config, "waku.create.from-default-branch"));
 
-    if opts.fetch {
+    if fetch {
         let sp = if opts.quiet {
             None
         } else {
@@ -59,7 +63,7 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
             &wt_path,
             branch,
             opts.from.as_deref(),
-            opts.from_default_branch,
+            from_default_branch,
             opts.quiet,
         );
 

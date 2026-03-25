@@ -453,6 +453,15 @@ pub fn config_values<'a>(config: &'a [(String, String)], key: &str) -> Vec<&'a s
         .collect()
 }
 
+pub fn config_bool(config: &[(String, String)], key: &str) -> bool {
+    config
+        .iter()
+        .rev()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| matches!(v.as_str(), "true" | "yes" | "on" | "1"))
+        .unwrap_or(false)
+}
+
 /// Recursively copy a file or directory from `src` to `dst`.
 pub fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
     if src.is_dir() {
@@ -623,6 +632,21 @@ mod tests {
         let config: Vec<(String, String)> = vec![];
         let result: Vec<&str> = config_values(&config, "waku.link.include");
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn config_bool_reads_last_matching_value() {
+        let config = vec![
+            ("waku.create.fetch".to_string(), "false".to_string()),
+            ("waku.create.fetch".to_string(), "true".to_string()),
+        ];
+        assert!(config_bool(&config, "waku.create.fetch"));
+    }
+
+    #[test]
+    fn config_bool_returns_false_for_missing_key() {
+        let config: Vec<(String, String)> = vec![];
+        assert!(!config_bool(&config, "waku.create.fetch"));
     }
 
     #[test]
