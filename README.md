@@ -119,6 +119,17 @@ git config --add waku.copy.include .direnv
 git config --add waku.copy.include Cargo.lock
 ```
 
+### Copy exclusions (`waku.copy.exclude`)
+
+Exclude specific files or subdirectories from being copied. Paths are relative to the repository root.
+
+```sh
+git config --add waku.copy.exclude node_modules/.cache
+git config --add waku.copy.exclude .direnv/tmp
+```
+
+This only applies to `waku.copy.include` entries. `.worktreeinclude` copies are not affected.
+
 ### `.worktreeinclude`
 
 Place a `.worktreeinclude` file at the repository root to automatically include gitignored files in new worktrees. Uses the same pattern syntax as `.gitignore`, but only matches files that are actually gitignored.
