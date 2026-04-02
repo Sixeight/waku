@@ -238,7 +238,12 @@ fn create_copies(
         return Ok(());
     }
 
-    copy_entries_parallel(root, wt_path, &valid, quiet);
+    let excludes: Vec<PathBuf> = super::config_values(config, "waku.copy.exclude")
+        .into_iter()
+        .map(|v| root.join(v.trim_end_matches('/')))
+        .collect();
+
+    copy_entries_parallel(root, wt_path, &valid, &excludes, quiet);
     Ok(())
 }
 
@@ -256,7 +261,8 @@ fn apply_worktreeinclude(
     match mode {
         WorktreeIncludeMode::Copy => {
             let names: Vec<&str> = files.iter().map(|p| p.to_str().unwrap_or_default()).collect();
-            copy_entries_parallel(root, wt_path, &names, quiet);
+            // waku.copy.exclude applies only to waku.copy.include, not .worktreeinclude
+            copy_entries_parallel(root, wt_path, &names, &[], quiet);
         }
         WorktreeIncludeMode::Link => {
             for rel in &files {
@@ -324,7 +330,13 @@ fn link_entry(source: &Path, target: &Path) -> Result<()> {
 }
 
 /// Copy multiple entries from `root` to `wt_path` in parallel.
-fn copy_entries_parallel(root: &Path, wt_path: &Path, names: &[&str], quiet: bool) {
+fn copy_entries_parallel(
+    root: &Path,
+    wt_path: &Path,
+    names: &[&str],
+    excludes: &[PathBuf],
+    quiet: bool,
+) {
     let sp = if quiet {
         None
     } else {
@@ -344,7 +356,7 @@ fn copy_entries_parallel(root: &Path, wt_path: &Path, names: &[&str], quiet: boo
                 let target = wt_path.join(name);
                 s.spawn(move || {
                     let result = remove_existing(&target)
-                        .and_then(|_| copy_recursive(&source, &target));
+                        .and_then(|_| copy_recursive(&source, &target, excludes));
                     (*name, result)
                 })
             })

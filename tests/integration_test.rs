@@ -1277,6 +1277,122 @@ fn remove_cleans_up_copies_before_remove() {
     assert!(!wt_path.exists(), "worktree should be removed");
 }
 
+// --- copy exclude tests ---
+
+#[test]
+fn create_copies_directory_with_exclude() {
+    let (_tmp, repo) = setup_repo();
+
+    // Create directory tree: .direnv/{env, cache/{big}}
+    fs::create_dir_all(repo.join(".direnv/cache")).unwrap();
+    fs::write(repo.join(".direnv/env"), "export FOO=bar").unwrap();
+    fs::write(repo.join(".direnv/cache/big"), "large data").unwrap();
+
+    run_git(&repo, &["config", "--add", "waku.copy.include", ".direnv"]);
+    run_git(&repo, &["config", "--add", "waku.copy.exclude", ".direnv/cache"]);
+
+    let output = run_waku(&repo, &["create", "feature-copy-exclude"]);
+    assert!(
+        output.status.success(),
+        "git-waku create failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-copy-exclude");
+    assert_eq!(
+        fs::read_to_string(wt_path.join(".direnv/env")).unwrap(),
+        "export FOO=bar",
+        ".direnv/env should be copied"
+    );
+    assert!(
+        !wt_path.join(".direnv/cache").exists(),
+        ".direnv/cache should be excluded"
+    );
+}
+
+#[test]
+fn create_copies_exclude_file_in_directory() {
+    let (_tmp, repo) = setup_repo();
+
+    fs::create_dir(repo.join("config")).unwrap();
+    fs::write(repo.join("config/app.toml"), "app config").unwrap();
+    fs::write(repo.join("config/secret.key"), "secret").unwrap();
+
+    run_git(&repo, &["config", "--add", "waku.copy.include", "config"]);
+    run_git(&repo, &["config", "--add", "waku.copy.exclude", "config/secret.key"]);
+
+    let output = run_waku(&repo, &["create", "feature-exclude-file"]);
+    assert!(output.status.success());
+
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-exclude-file");
+    assert!(wt_path.join("config/app.toml").exists(), "app.toml should be copied");
+    assert!(!wt_path.join("config/secret.key").exists(), "secret.key should be excluded");
+}
+
+#[test]
+fn create_copies_with_multiple_excludes() {
+    let (_tmp, repo) = setup_repo();
+
+    fs::create_dir_all(repo.join("vendor/a")).unwrap();
+    fs::create_dir_all(repo.join("vendor/b")).unwrap();
+    fs::create_dir_all(repo.join("vendor/c")).unwrap();
+    fs::write(repo.join("vendor/a/x"), "a").unwrap();
+    fs::write(repo.join("vendor/b/x"), "b").unwrap();
+    fs::write(repo.join("vendor/c/x"), "c").unwrap();
+
+    run_git(&repo, &["config", "--add", "waku.copy.include", "vendor"]);
+    run_git(&repo, &["config", "--add", "waku.copy.exclude", "vendor/a"]);
+    run_git(&repo, &["config", "--add", "waku.copy.exclude", "vendor/b"]);
+
+    let output = run_waku(&repo, &["create", "feature-multi-exclude"]);
+    assert!(output.status.success());
+
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-multi-exclude");
+    assert!(!wt_path.join("vendor/a").exists(), "vendor/a should be excluded");
+    assert!(!wt_path.join("vendor/b").exists(), "vendor/b should be excluded");
+    assert_eq!(fs::read_to_string(wt_path.join("vendor/c/x")).unwrap(), "c", "vendor/c should be copied");
+}
+
+#[test]
+fn create_copies_exclude_no_false_prefix() {
+    let (_tmp, repo) = setup_repo();
+
+    fs::create_dir_all(repo.join("node_modules/.cache")).unwrap();
+    fs::create_dir_all(repo.join("node_modules/.cache-v2")).unwrap();
+    fs::write(repo.join("node_modules/.cache/x"), "excluded").unwrap();
+    fs::write(repo.join("node_modules/.cache-v2/y"), "kept").unwrap();
+
+    run_git(&repo, &["config", "--add", "waku.copy.include", "node_modules"]);
+    run_git(&repo, &["config", "--add", "waku.copy.exclude", "node_modules/.cache"]);
+
+    let output = run_waku(&repo, &["create", "feature-no-false-prefix"]);
+    assert!(output.status.success());
+
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-no-false-prefix");
+    assert!(!wt_path.join("node_modules/.cache").exists(), ".cache should be excluded");
+    assert!(
+        wt_path.join("node_modules/.cache-v2/y").exists(),
+        ".cache-v2 should NOT be excluded (no false prefix match)"
+    );
+}
+
+#[test]
+fn create_copies_exclude_matches_include_skips_entirely() {
+    let (_tmp, repo) = setup_repo();
+
+    fs::create_dir(repo.join("data")).unwrap();
+    fs::write(repo.join("data/file.txt"), "content").unwrap();
+
+    run_git(&repo, &["config", "--add", "waku.copy.include", "data"]);
+    run_git(&repo, &["config", "--add", "waku.copy.exclude", "data"]);
+
+    let output = run_waku(&repo, &["create", "feature-exclude-all"]);
+    assert!(output.status.success());
+
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-exclude-all");
+    assert!(!wt_path.join("data").exists(), "data should not be copied when excluded entirely");
+}
+
 // --- .worktreeinclude tests ---
 
 #[test]

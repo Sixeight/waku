@@ -462,8 +462,15 @@ pub fn config_bool(config: &[(String, String)], key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Recursively copy a file or directory from `src` to `dst`.
-pub fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
+/// Recursively copy a file or directory from `src` to `dst`, skipping absolute paths in `excludes`.
+pub fn copy_recursive(src: &Path, dst: &Path, excludes: &[PathBuf]) -> Result<()> {
+    debug_assert!(
+        excludes.iter().all(|ex| ex.is_absolute()),
+        "excludes must be absolute paths"
+    );
+    if excludes.iter().any(|ex| src.starts_with(ex)) {
+        return Ok(());
+    }
     if src.is_dir() {
         fs::create_dir_all(dst)
             .with_context(|| format!("failed to create dir: {}", dst.display()))?;
@@ -472,7 +479,7 @@ pub fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
         {
             let entry = entry?;
             let entry_dst = dst.join(entry.file_name());
-            copy_recursive(&entry.path(), &entry_dst)?;
+            copy_recursive(&entry.path(), &entry_dst, excludes)?;
         }
     } else {
         if let Some(parent) = dst.parent() {
@@ -647,6 +654,80 @@ mod tests {
     fn config_bool_returns_false_for_missing_key() {
         let config: Vec<(String, String)> = vec![];
         assert!(!config_bool(&config, "waku.create.fetch"));
+    }
+
+    #[test]
+    fn copy_recursive_with_excludes_skips_excluded_dir() {
+        let tmp = TempDir::new().expect("failed to create tempdir");
+        let src = tmp.path().join("src_dir");
+        let dst = tmp.path().join("dst_dir");
+
+        // Build source tree: src_dir/{a.txt, cache/{big.dat}, keep/{ok.txt}}
+        fs::create_dir_all(src.join("cache")).unwrap();
+        fs::create_dir_all(src.join("keep")).unwrap();
+        fs::write(src.join("a.txt"), "root file").unwrap();
+        fs::write(src.join("cache/big.dat"), "should be excluded").unwrap();
+        fs::write(src.join("keep/ok.txt"), "should be kept").unwrap();
+
+        let excludes = vec![src.join("cache")];
+        copy_recursive(&src, &dst, &excludes).unwrap();
+
+        assert!(dst.join("a.txt").exists(), "a.txt should be copied");
+        assert!(dst.join("keep/ok.txt").exists(), "keep/ok.txt should be copied");
+        assert!(!dst.join("cache").exists(), "cache dir should be excluded");
+    }
+
+    #[test]
+    fn copy_recursive_with_excludes_skips_excluded_file() {
+        let tmp = TempDir::new().expect("failed to create tempdir");
+        let src = tmp.path().join("src_dir");
+        let dst = tmp.path().join("dst_dir");
+
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("keep.txt"), "keep").unwrap();
+        fs::write(src.join("secret.txt"), "exclude me").unwrap();
+
+        let excludes = vec![src.join("secret.txt")];
+        copy_recursive(&src, &dst, &excludes).unwrap();
+
+        assert!(dst.join("keep.txt").exists(), "keep.txt should be copied");
+        assert!(!dst.join("secret.txt").exists(), "secret.txt should be excluded");
+    }
+
+    #[test]
+    fn copy_recursive_with_excludes_no_false_prefix_match() {
+        let tmp = TempDir::new().expect("failed to create tempdir");
+        let src = tmp.path().join("src_dir");
+        let dst = tmp.path().join("dst_dir");
+
+        // .cache should be excluded but .cache-v2 should NOT
+        fs::create_dir_all(src.join(".cache")).unwrap();
+        fs::create_dir_all(src.join(".cache-v2")).unwrap();
+        fs::write(src.join(".cache/x"), "excluded").unwrap();
+        fs::write(src.join(".cache-v2/y"), "kept").unwrap();
+
+        let excludes = vec![src.join(".cache")];
+        copy_recursive(&src, &dst, &excludes).unwrap();
+
+        assert!(!dst.join(".cache").exists(), ".cache should be excluded");
+        assert!(dst.join(".cache-v2/y").exists(), ".cache-v2 should NOT be excluded");
+    }
+
+    #[test]
+    fn copy_recursive_with_empty_excludes_copies_everything() {
+        let tmp = TempDir::new().expect("failed to create tempdir");
+        let src = tmp.path().join("src_dir");
+        let dst = tmp.path().join("dst_dir");
+
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("a.txt"), "a").unwrap();
+        fs::write(src.join("sub/b.txt"), "b").unwrap();
+
+        let excludes: Vec<PathBuf> = vec![];
+        copy_recursive(&src, &dst, &excludes).unwrap();
+
+        assert!(dst.join("a.txt").exists());
+        assert!(dst.join("sub/b.txt").exists());
     }
 
     #[test]
