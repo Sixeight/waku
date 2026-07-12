@@ -159,10 +159,12 @@ git config waku.command.agent "claude --resume"
 git config waku.command.agent "claude --append \"review this branch\""
 ```
 
-Pass a command to `-a` or `-e` to override it for one launch:
+Pass a command with `=` to override it for one launch (`-a path` still treats
+`path` as the branch name):
 
 ```sh
-git waku create my-feature -a "codex --model gpt-5"
+git waku create my-feature -a="codex --model gpt-5"
+git waku open -a my-feature
 ```
 
 ### Post-create hooks (`waku.hook.postCreate`)

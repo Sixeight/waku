@@ -2159,13 +2159,12 @@ fn create_agent_command_overrides_config_with_inline_command_and_arguments() {
         &[
             "create",
             "feature-agent-override",
-            "--agent",
-            "touch 'from override'",
+            "--agent=touch 'from override'",
         ],
     );
     assert!(
         output.status.success(),
-        "git-waku create --agent <command> should override the configured command: {}",
+        "git-waku create --agent=<command> should override the configured command: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -2197,13 +2196,12 @@ fn create_editor_command_overrides_config_with_inline_command_and_arguments() {
         &[
             "create",
             "feature-editor-override",
-            "--editor",
-            "touch from-override",
+            "--editor=touch from-override",
         ],
     );
     assert!(
         output.status.success(),
-        "git-waku create --editor <command> should override the configured command: {}",
+        "git-waku create --editor=<command> should override the configured command: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -2265,13 +2263,12 @@ fn open_agent_command_overrides_config_with_inline_command_and_arguments() {
         &[
             "open",
             "feature-open-agent-override",
-            "--agent",
-            "touch from-override",
+            "--agent=touch from-override",
         ],
     );
     assert!(
         output.status.success(),
-        "git-waku open --agent <command> should override the configured command: {}",
+        "git-waku open --agent=<command> should override the configured command: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -2286,6 +2283,33 @@ fn open_agent_command_overrides_config_with_inline_command_and_arguments() {
     assert!(
         !wt_path.join("from-config").exists(),
         "the configured command should not run when an inline command is given"
+    );
+}
+
+#[test]
+fn open_agent_flag_without_equals_keeps_following_path_as_branch() {
+    let (_tmp, repo) = setup_repo();
+    run_waku(&repo, &["create", "feature-open-dash-a"]);
+    run_git(
+        &repo,
+        &["config", "waku.command.agent", "touch opened-by-agent"],
+    );
+
+    // `-a path` must treat `path` as the branch, not as an agent command override.
+    let output = run_waku(&repo, &["open", "-a", "feature-open-dash-a"]);
+    assert!(
+        output.status.success(),
+        "git-waku open -a <branch> should keep the branch argument: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-open-dash-a");
+    assert!(
+        wt_path.join("opened-by-agent").exists(),
+        "open -a <branch> should launch the configured agent in that worktree"
     );
 }
 

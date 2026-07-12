@@ -22,11 +22,25 @@ enum Command {
         branch: String,
 
         /// Open with Claude Code after creation
-        #[arg(short = 'a', long = "agent", conflicts_with = "editor", num_args = 0..=1, default_missing_value = "")]
+        #[arg(
+            short = 'a',
+            long = "agent",
+            conflicts_with = "editor",
+            num_args = 0..=1,
+            default_missing_value = "",
+            require_equals = true
+        )]
         agent: Option<String>,
 
         /// Open with Neovim after creation
-        #[arg(short = 'e', long = "editor", conflicts_with = "agent", num_args = 0..=1, default_missing_value = "")]
+        #[arg(
+            short = 'e',
+            long = "editor",
+            conflicts_with = "agent",
+            num_args = 0..=1,
+            default_missing_value = "",
+            require_equals = true
+        )]
         editor: Option<String>,
 
         /// Base ref to create the branch from
@@ -48,11 +62,25 @@ enum Command {
         branch: Option<String>,
 
         /// Open with Claude Code instead of Neovim
-        #[arg(short = 'a', long = "agent", conflicts_with = "editor", num_args = 0..=1, default_missing_value = "")]
+        #[arg(
+            short = 'a',
+            long = "agent",
+            conflicts_with = "editor",
+            num_args = 0..=1,
+            default_missing_value = "",
+            require_equals = true
+        )]
         agent: Option<String>,
 
         /// Open with Neovim explicitly
-        #[arg(short = 'e', long = "editor", conflicts_with = "agent", num_args = 0..=1, default_missing_value = "")]
+        #[arg(
+            short = 'e',
+            long = "editor",
+            conflicts_with = "agent",
+            num_args = 0..=1,
+            default_missing_value = "",
+            require_equals = true
+        )]
         editor: Option<String>,
 
         /// Arguments passed through to the launched tool
