@@ -3,7 +3,12 @@ use anyhow::Result;
 use super::create::{self, CreateOptions};
 use crate::{git, worktree};
 
-pub fn run(branch: Option<&str>, agent: bool, args: &[String]) -> Result<()> {
+pub fn run(
+    branch: Option<&str>,
+    agent_command: Option<&str>,
+    editor_command: Option<&str>,
+    args: &[String],
+) -> Result<()> {
     let dir = match super::resolve_dir(branch) {
         Ok(dir) => dir,
         Err(_) if branch.is_some() => create::run(
@@ -16,8 +21,18 @@ pub fn run(branch: Option<&str>, agent: bool, args: &[String]) -> Result<()> {
         Err(e) => return Err(e),
     };
     let root = worktree::repo_root()?;
-    let tool = if agent { "agent" } else { "editor" };
-    let (cmd, configured_args) = super::resolve_tool_command_in(&root, tool)?;
+    let (tool, command_override) = if let Some(command) = agent_command {
+        ("agent", Some(command))
+    } else if let Some(command) = editor_command {
+        ("editor", Some(command))
+    } else {
+        ("editor", None)
+    };
+    let (cmd, configured_args) = super::resolve_tool_command_with_override_in(
+        &root,
+        tool,
+        command_override.filter(|command| !command.is_empty()),
+    )?;
     let args: Vec<&str> = configured_args
         .iter()
         .map(|arg| arg.as_str())

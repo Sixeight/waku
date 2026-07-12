@@ -163,6 +163,18 @@ pub fn resolve_tool_command_in(root: &Path, tool: &str) -> Result<(String, Vec<S
     parse_command_line(&command_line)
 }
 
+/// Resolve a command line, preferring a one-time command override over configuration.
+pub fn resolve_tool_command_with_override_in(
+    root: &Path,
+    tool: &str,
+    command_override: Option<&str>,
+) -> Result<(String, Vec<String>)> {
+    match command_override {
+        Some(command_line) => parse_command_line(command_line),
+        None => resolve_tool_command_in(root, tool),
+    }
+}
+
 fn parse_command_line(command_line: &str) -> Result<(String, Vec<String>)> {
     let mut args = Vec::new();
     let mut current = String::new();

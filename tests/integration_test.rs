@@ -2146,6 +2146,82 @@ fn create_agent_command_accepts_configured_arguments() {
 }
 
 #[test]
+fn create_agent_command_overrides_config_with_inline_command_and_arguments() {
+    let (_tmp, repo) = setup_repo();
+
+    run_git(
+        &repo,
+        &["config", "waku.command.agent", "touch from-config"],
+    );
+
+    let output = run_waku(
+        &repo,
+        &[
+            "create",
+            "feature-agent-override",
+            "--agent",
+            "touch 'from override'",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "git-waku create --agent <command> should override the configured command: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-agent-override");
+    assert!(
+        wt_path.join("from override").exists(),
+        "the inline command and its arguments should run inside the worktree"
+    );
+    assert!(
+        !wt_path.join("from-config").exists(),
+        "the configured command should not run when an inline command is given"
+    );
+}
+
+#[test]
+fn create_editor_command_overrides_config_with_inline_command_and_arguments() {
+    let (_tmp, repo) = setup_repo();
+
+    run_git(
+        &repo,
+        &["config", "waku.command.editor", "touch from-config"],
+    );
+
+    let output = run_waku(
+        &repo,
+        &[
+            "create",
+            "feature-editor-override",
+            "--editor",
+            "touch from-override",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "git-waku create --editor <command> should override the configured command: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-editor-override");
+    assert!(
+        wt_path.join("from-override").exists(),
+        "the inline command and its arguments should run inside the worktree"
+    );
+    assert!(
+        !wt_path.join("from-config").exists(),
+        "the configured command should not run when an inline command is given"
+    );
+}
+
+#[test]
 fn open_agent_command_merges_configured_and_cli_arguments() {
     let (_tmp, repo) = setup_repo();
 
@@ -2172,6 +2248,44 @@ fn open_agent_command_merges_configured_and_cli_arguments() {
     assert!(
         wt_path.join("from-cli").exists(),
         "open --agent should append CLI arguments after configured ones"
+    );
+}
+
+#[test]
+fn open_agent_command_overrides_config_with_inline_command_and_arguments() {
+    let (_tmp, repo) = setup_repo();
+    run_waku(&repo, &["create", "feature-open-agent-override"]);
+    run_git(
+        &repo,
+        &["config", "waku.command.agent", "touch from-config"],
+    );
+
+    let output = run_waku(
+        &repo,
+        &[
+            "open",
+            "feature-open-agent-override",
+            "--agent",
+            "touch from-override",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "git-waku open --agent <command> should override the configured command: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-open-agent-override");
+    assert!(
+        wt_path.join("from-override").exists(),
+        "the inline command and its arguments should run inside the worktree"
+    );
+    assert!(
+        !wt_path.join("from-config").exists(),
+        "the configured command should not run when an inline command is given"
     );
 }
 

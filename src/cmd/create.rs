@@ -15,6 +15,8 @@ use crate::{git, worktree};
 pub struct CreateOptions {
     pub agent: bool,
     pub editor: bool,
+    pub agent_command: Option<String>,
+    pub editor_command: Option<String>,
     pub fetch: bool,
     pub from: Option<String>,
     pub from_default_branch: bool,
@@ -87,11 +89,19 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     run_post_create_hooks(&wt_path, &waku_config, opts.quiet)?;
 
     if opts.agent {
-        let (cmd, args) = super::resolve_tool_command_in(&root, "agent")?;
+        let (cmd, args) = super::resolve_tool_command_with_override_in(
+            &root,
+            "agent",
+            opts.agent_command.as_deref(),
+        )?;
         let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
         git::exec_command(&cmd, &args, &wt_path)?;
     } else if opts.editor {
-        let (cmd, args) = super::resolve_tool_command_in(&root, "editor")?;
+        let (cmd, args) = super::resolve_tool_command_with_override_in(
+            &root,
+            "editor",
+            opts.editor_command.as_deref(),
+        )?;
         let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
         git::exec_command(&cmd, &args, &wt_path)?;
     } else if !opts.quiet {

@@ -22,12 +22,12 @@ enum Command {
         branch: String,
 
         /// Open with Claude Code after creation
-        #[arg(short = 'a', long = "agent", conflicts_with = "editor")]
-        agent: bool,
+        #[arg(short = 'a', long = "agent", conflicts_with = "editor", num_args = 0..=1, default_missing_value = "")]
+        agent: Option<String>,
 
         /// Open with Neovim after creation
-        #[arg(short = 'e', long = "editor", conflicts_with = "agent")]
-        editor: bool,
+        #[arg(short = 'e', long = "editor", conflicts_with = "agent", num_args = 0..=1, default_missing_value = "")]
+        editor: Option<String>,
 
         /// Base ref to create the branch from
         #[arg(long = "from")]
@@ -48,8 +48,12 @@ enum Command {
         branch: Option<String>,
 
         /// Open with Claude Code instead of Neovim
-        #[arg(short = 'a', long = "agent")]
-        agent: bool,
+        #[arg(short = 'a', long = "agent", conflicts_with = "editor", num_args = 0..=1, default_missing_value = "")]
+        agent: Option<String>,
+
+        /// Open with Neovim explicitly
+        #[arg(short = 'e', long = "editor", conflicts_with = "agent", num_args = 0..=1, default_missing_value = "")]
+        editor: Option<String>,
 
         /// Arguments passed through to the launched tool
         #[arg(last = true)]
@@ -130,8 +134,10 @@ fn main() {
         }) => cmd::create::run(
             &branch,
             cmd::create::CreateOptions {
-                agent,
-                editor,
+                agent: agent.is_some(),
+                editor: editor.is_some(),
+                agent_command: agent.filter(|command| !command.is_empty()),
+                editor_command: editor.filter(|command| !command.is_empty()),
                 from,
                 fetch,
                 from_default_branch,
@@ -139,7 +145,12 @@ fn main() {
             },
         )
         .map(|_| ()),
-        Some(Command::Open { branch, agent, args }) => cmd::open::run(branch.as_deref(), agent, &args),
+        Some(Command::Open {
+            branch,
+            agent,
+            editor,
+            args,
+        }) => cmd::open::run(branch.as_deref(), agent.as_deref(), editor.as_deref(), &args),
         Some(Command::Path { branch }) => cmd::path::run(&branch),
         Some(Command::Remove {
             query,

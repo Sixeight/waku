@@ -159,6 +159,12 @@ git config waku.command.agent "claude --resume"
 git config waku.command.agent "claude --append \"review this branch\""
 ```
 
+Pass a command to `-a` or `-e` to override it for one launch:
+
+```sh
+git waku create my-feature -a "codex --model gpt-5"
+```
+
 ### Post-create hooks (`waku.hook.postCreate`)
 
 Run shell commands after worktree creation:
