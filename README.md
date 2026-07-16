@@ -23,6 +23,7 @@ git waku create my-feature
 git waku create my-feature --from origin/main   # branch from a specific ref
 git waku create my-feature --agent               # create and open with Claude Code
 git waku create my-feature --editor             # create and open with Neovim
+git waku create my-feature --cd                 # create and start a shell in the worktree
 ```
 
 Worktrees are created in a sibling directory named `{repo}-worktrees/`. Slashes in branch names become dashes in directory names:
@@ -118,6 +119,10 @@ Share files or directories as copies instead of symlinks. Useful when tools don'
 git config --add waku.copy.include .direnv
 git config --add waku.copy.include Cargo.lock
 ```
+
+Pass `--copy-from-base` to leave these paths at the new worktree's base revision
+instead of replacing them with files from the main worktree. This keeps tracked
+copy targets clean, but does not copy untracked targets such as `.direnv`.
 
 ### Copy exclusions (`waku.copy.exclude`)
 

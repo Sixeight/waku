@@ -43,6 +43,10 @@ enum Command {
         )]
         editor: Option<String>,
 
+        /// Start a shell in the worktree after creation
+        #[arg(long, conflicts_with_all = ["agent", "editor"])]
+        cd: bool,
+
         /// Base ref to create the branch from
         #[arg(long = "from")]
         from: Option<String>,
@@ -54,6 +58,10 @@ enum Command {
         /// Create from origin's default branch
         #[arg(long = "from-default-branch", conflicts_with = "from")]
         from_default_branch: bool,
+
+        /// Keep configured copy targets at their base revision
+        #[arg(long = "copy-from-base")]
+        copy_from_base: bool,
     },
     /// Open a worktree in Neovim or Claude Code
     #[command(alias = "use")]
@@ -156,9 +164,11 @@ fn main() {
             branch,
             agent,
             editor,
+            cd,
             from,
             fetch,
             from_default_branch,
+            copy_from_base,
         }) => cmd::create::run(
             &branch,
             cmd::create::CreateOptions {
@@ -166,9 +176,11 @@ fn main() {
                 editor: editor.is_some(),
                 agent_command: agent.filter(|command| !command.is_empty()),
                 editor_command: editor.filter(|command| !command.is_empty()),
+                cd,
                 from,
                 fetch,
                 from_default_branch,
+                copy_from_base,
                 ..Default::default()
             },
         )

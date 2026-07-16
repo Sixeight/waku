@@ -17,9 +17,11 @@ pub struct CreateOptions {
     pub editor: bool,
     pub agent_command: Option<String>,
     pub editor_command: Option<String>,
+    pub cd: bool,
     pub fetch: bool,
     pub from: Option<String>,
     pub from_default_branch: bool,
+    pub copy_from_base: bool,
     pub quiet: bool,
     pub root: Option<PathBuf>,
 }
@@ -84,7 +86,9 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     wt_result?;
 
     create_symlinks(&root, &wt_path, &waku_config, opts.quiet)?;
-    create_copies(&root, &wt_path, &waku_config, opts.quiet)?;
+    if !opts.copy_from_base {
+        create_copies(&root, &wt_path, &waku_config, opts.quiet)?;
+    }
     apply_worktreeinclude(&root, &wt_path, wti_mode, wti_files?, opts.quiet)?;
     run_post_create_hooks(&wt_path, &waku_config, opts.quiet)?;
 
@@ -104,6 +108,9 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
         )?;
         let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
         git::exec_command(&cmd, &args, &wt_path)?;
+    } else if opts.cd {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        git::exec_command(&shell, &[], &wt_path)?;
     } else if !opts.quiet {
         eprintln!();
         eprintln!(

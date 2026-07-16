@@ -105,6 +105,30 @@ fn create_creates_worktree() {
 }
 
 #[test]
+fn create_cd_starts_shell_in_worktree() {
+    let (_tmp, repo) = setup_repo();
+
+    let output = Command::new(git_waku_bin())
+        .args(["create", "feature-cd-shell", "--cd"])
+        .env("SHELL", "/bin/pwd")
+        .current_dir(&repo)
+        .output()
+        .expect("failed to run git-waku");
+    assert!(
+        output.status.success(),
+        "git-waku create --cd failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let expected = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-cd-shell");
+    let actual = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    assert_eq!(actual.canonicalize().unwrap(), expected.canonicalize().unwrap());
+}
+
+#[test]
 fn create_is_idempotent() {
     let (_tmp, repo) = setup_repo();
 
@@ -1178,6 +1202,34 @@ fn create_copies_file() {
         "lock-content",
         "copied file should have same content"
     );
+}
+
+#[test]
+fn create_copy_from_base_keeps_tracked_file_at_base_revision() {
+    let (_tmp, repo) = setup_repo();
+
+    fs::write(repo.join("Cargo.lock"), "base-lock\n").unwrap();
+    run_git(&repo, &["add", "Cargo.lock"]);
+    run_git(&repo, &["commit", "-m", "add lockfile"]);
+    fs::write(repo.join("Cargo.lock"), "main-working-copy\n").unwrap();
+    run_git(&repo, &["config", "waku.copy.include", "Cargo.lock"]);
+
+    let output = run_waku(
+        &repo,
+        &["create", "feature-copy-from-base", "--copy-from-base"],
+    );
+    assert!(
+        output.status.success(),
+        "git-waku create failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-copy-from-base");
+    assert_eq!(fs::read_to_string(wt_path.join("Cargo.lock")).unwrap(), "base-lock\n");
+    run_git(&wt_path, &["diff", "--quiet", "HEAD"]);
 }
 
 #[test]
