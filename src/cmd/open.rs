@@ -9,18 +9,22 @@ pub fn run(
     editor_command: Option<&str>,
     args: &[String],
 ) -> Result<()> {
-    let dir = match super::resolve_dir(branch) {
-        Ok(dir) => dir,
-        Err(_) if branch.is_some() => create::run(
-            branch.unwrap(),
-            CreateOptions {
-                quiet: true,
-                ..Default::default()
-            },
-        )?,
-        Err(e) => return Err(e),
-    };
     let root = worktree::repo_root()?;
+    let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
+    let dir = match branch {
+        None => std::env::current_dir()?,
+        Some(b) => match worktree::resolve_worktree_with_config(&root, b, &waku_config) {
+            Ok(dir) => dir,
+            Err(_) => create::run(
+                b,
+                CreateOptions {
+                    quiet: true,
+                    root: Some(root.clone()),
+                    ..Default::default()
+                },
+            )?,
+        },
+    };
     let (tool, command_override) = if let Some(command) = agent_command {
         ("agent", Some(command))
     } else if let Some(command) = editor_command {
@@ -28,8 +32,8 @@ pub fn run(
     } else {
         ("editor", None)
     };
-    let (cmd, configured_args) = super::resolve_tool_command_with_override_in(
-        &root,
+    let (cmd, configured_args) = super::resolve_tool_command_with_override(
+        &waku_config,
         tool,
         command_override.filter(|command| !command.is_empty()),
     )?;

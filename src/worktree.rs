@@ -61,6 +61,43 @@ pub fn worktree_path_with_config(
     Ok(worktrees_base_with_config(root, config)?.join(dir_name))
 }
 
+/// Read the branch checked out in a worktree by following its `.git` file.
+/// Returns None for the main worktree (`.git` is a directory) and detached HEAD.
+/// Pure file reads — no git process spawn.
+fn worktree_branch(wt_path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(wt_path.join(".git")).ok()?;
+    let gitdir = content.strip_prefix("gitdir:")?.trim();
+    let gitdir_path = if Path::new(gitdir).is_absolute() {
+        PathBuf::from(gitdir)
+    } else {
+        wt_path.join(gitdir)
+    };
+    let head = std::fs::read_to_string(gitdir_path.join("HEAD")).ok()?;
+    Some(head.trim().strip_prefix("ref: refs/heads/")?.to_string())
+}
+
+/// Resolve a query to a worktree path using pre-loaded waku config.
+/// When the branch lives at its conventional path (verified against the
+/// worktree's checked-out branch), this avoids spawning `git worktree list`.
+pub fn resolve_worktree_with_config(
+    root: &Path,
+    query: &str,
+    config: &[(String, String)],
+) -> Result<PathBuf> {
+    let query_path = PathBuf::from(query);
+    if query_path.is_absolute() && query_path.is_dir() {
+        return Ok(query_path);
+    }
+
+    if let Ok(candidate) = worktree_path_with_config(root, query, config) {
+        if candidate.is_dir() && worktree_branch(&candidate).as_deref() == Some(query) {
+            return Ok(candidate);
+        }
+    }
+
+    resolve_worktree_in(root, query)
+}
+
 /// Resolve a query to a worktree path.
 /// Accepts: absolute path, branch name, or worktree directory name.
 pub fn resolve_worktree(query: &str) -> Result<PathBuf> {
@@ -71,8 +108,11 @@ pub fn resolve_worktree(query: &str) -> Result<PathBuf> {
         return Ok(query_path);
     }
 
-    let root = repo_root()?;
-    let worktrees = git::worktree_list(&root)?;
+    resolve_worktree_in(&repo_root()?, query)
+}
+
+fn resolve_worktree_in(root: &Path, query: &str) -> Result<PathBuf> {
+    let worktrees = git::worktree_list(root)?;
 
     // 2. Branch name match
     for (path, wt_branch) in &worktrees {
@@ -99,6 +139,92 @@ pub fn resolve_worktree(query: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    fn init_repo_with_worktree(branch: &str, wt_dir: &str) -> (TempDir, PathBuf, PathBuf) {
+        let tmp = TempDir::new().expect("failed to create tempdir");
+        let root = tmp.path().join("repo");
+        std::fs::create_dir(&root).unwrap();
+        for args in [
+            vec!["init", "-q", "--initial-branch=main"],
+            vec!["commit", "-q", "--allow-empty", "-m", "init"],
+        ] {
+            let status = Command::new("git")
+                .args(["-c", "user.email=t@example.com", "-c", "user.name=t"])
+                .args(&args)
+                .current_dir(&root)
+                .status()
+                .expect("failed to run git");
+            assert!(status.success(), "git {args:?} should succeed");
+        }
+        let wt_path = tmp.path().join(wt_dir);
+        let status = Command::new("git")
+            .args(["worktree", "add", "-q", "-b", branch])
+            .arg(&wt_path)
+            .current_dir(&root)
+            .status()
+            .expect("failed to run git worktree add");
+        assert!(status.success(), "git worktree add should succeed");
+        (tmp, root, wt_path)
+    }
+
+    fn config_for(base: &Path) -> Vec<(String, String)> {
+        vec![(
+            "waku.worktrees.path".to_string(),
+            base.to_string_lossy().to_string(),
+        )]
+    }
+
+    #[test]
+    fn worktree_branch_reads_checked_out_branch() {
+        let (_tmp, root, wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
+        assert_eq!(worktree_branch(&wt_path).as_deref(), Some("feature/foo"));
+        // The main worktree has a .git directory, not a file — must not resolve.
+        assert_eq!(worktree_branch(&root), None);
+    }
+
+    #[test]
+    fn resolve_worktree_with_config_hits_conventional_path() {
+        let (tmp, root, wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
+        let config = config_for(&tmp.path().join("wt"));
+        let resolved = resolve_worktree_with_config(&root, "feature/foo", &config).unwrap();
+        assert_eq!(resolved, wt_path);
+    }
+
+    #[test]
+    fn resolve_worktree_with_config_falls_back_when_dir_has_other_branch() {
+        // The worktree lives at a non-conventional path, while the conventional
+        // path is occupied by a worktree with a different branch.
+        let (tmp, root, wt_path) = init_repo_with_worktree("feature/foo", "elsewhere");
+        let status = Command::new("git")
+            .args(["worktree", "add", "-q", "-b", "other"])
+            .arg(tmp.path().join("wt/feature-foo"))
+            .current_dir(&root)
+            .status()
+            .expect("failed to run git worktree add");
+        assert!(status.success());
+
+        let config = config_for(&tmp.path().join("wt"));
+        let resolved = resolve_worktree_with_config(&root, "feature/foo", &config).unwrap();
+        // git worktree list reports canonicalized paths (/var → /private/var on macOS)
+        assert_eq!(resolved, wt_path.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn resolve_worktree_with_config_falls_back_to_dir_name_match() {
+        let (tmp, root, wt_path) = init_repo_with_worktree("feature/foo", "wt/custom-name");
+        let config = config_for(&tmp.path().join("wt"));
+        let resolved = resolve_worktree_with_config(&root, "custom-name", &config).unwrap();
+        assert_eq!(resolved, wt_path.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn resolve_worktree_with_config_errors_for_unknown_query() {
+        let (tmp, root, _wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
+        let config = config_for(&tmp.path().join("wt"));
+        assert!(resolve_worktree_with_config(&root, "nope", &config).is_err());
+    }
 
     #[test]
     fn worktrees_base_default_without_config() {

@@ -130,10 +130,12 @@ pub fn print_warning(context: &str, error: &anyhow::Error) {
 }
 
 /// Resolve the configured command line for a tool, with defaults.
+/// The last matching entry wins, mirroring `git config --get` semantics.
 pub fn resolve_tool(config: &[(String, String)], tool: &str) -> String {
     let key = format!("waku.command.{tool}");
     config
         .iter()
+        .rev()
         .find(|(k, _)| k == &key)
         .map(|(_, v)| v.clone())
         .unwrap_or_else(|| match tool {
@@ -161,6 +163,18 @@ pub fn resolve_tool_command(config: &[(String, String)], tool: &str) -> Result<(
 pub fn resolve_tool_command_in(root: &Path, tool: &str) -> Result<(String, Vec<String>)> {
     let command_line = resolve_tool_in(root, tool)?;
     parse_command_line(&command_line)
+}
+
+/// Resolve a command line from pre-loaded config, preferring a one-time override.
+pub fn resolve_tool_command_with_override(
+    config: &[(String, String)],
+    tool: &str,
+    command_override: Option<&str>,
+) -> Result<(String, Vec<String>)> {
+    match command_override {
+        Some(command_line) => parse_command_line(command_line),
+        None => resolve_tool_command(config, tool),
+    }
 }
 
 /// Resolve a command line, preferring a one-time command override over configuration.
@@ -571,6 +585,17 @@ mod tests {
         ];
         assert_eq!(resolve_tool(&config, "agent"), "aider");
         assert_eq!(resolve_tool(&config, "editor"), "vim");
+    }
+
+    #[test]
+    fn resolve_tool_prefers_last_value_like_git_config_get() {
+        // git config --get-regexp lists system → global → local in order,
+        // and `git config --get` returns the last (most specific) value.
+        let config = vec![
+            ("waku.command.agent".to_string(), "global-agent".to_string()),
+            ("waku.command.agent".to_string(), "local-agent".to_string()),
+        ];
+        assert_eq!(resolve_tool(&config, "agent"), "local-agent");
     }
 
     #[test]
