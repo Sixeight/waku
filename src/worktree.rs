@@ -61,10 +61,12 @@ pub fn worktree_path_with_config(
     Ok(worktrees_base_with_config(root, config)?.join(dir_name))
 }
 
-/// Read the branch checked out in a worktree by following its `.git` file.
-/// Returns None for the main worktree (`.git` is a directory) and detached HEAD.
-/// Pure file reads — no git process spawn.
-fn worktree_branch(wt_path: &Path) -> Option<String> {
+/// Read the branch checked out in a worktree by following its `.git` file,
+/// verifying the worktree belongs to the repository at `root`.
+/// Returns None for the main worktree (`.git` is a directory), detached HEAD,
+/// and worktrees linked to another repository. Pure file reads — no git
+/// process spawn.
+fn worktree_branch(root: &Path, wt_path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(wt_path.join(".git")).ok()?;
     let gitdir = content.strip_prefix("gitdir:")?.trim();
     let gitdir_path = if Path::new(gitdir).is_absolute() {
@@ -72,6 +74,12 @@ fn worktree_branch(wt_path: &Path) -> Option<String> {
     } else {
         wt_path.join(gitdir)
     };
+    // A shared worktrees base can hold same-named worktrees of other repos;
+    // only trust worktree metadata stored under this repo's .git/worktrees.
+    let owned = root.join(".git").join("worktrees").canonicalize().ok()?;
+    if !gitdir_path.canonicalize().ok()?.starts_with(owned) {
+        return None;
+    }
     let head = std::fs::read_to_string(gitdir_path.join("HEAD")).ok()?;
     Some(head.trim().strip_prefix("ref: refs/heads/")?.to_string())
 }
@@ -90,8 +98,9 @@ pub fn resolve_worktree_with_config(
     }
 
     if let Ok(candidate) = worktree_path_with_config(root, query, config) {
-        if candidate.is_dir() && worktree_branch(&candidate).as_deref() == Some(query) {
-            return Ok(candidate);
+        if candidate.is_dir() && worktree_branch(root, &candidate).as_deref() == Some(query) {
+            // Match the canonicalized paths `git worktree list` reports.
+            return Ok(candidate.canonicalize().unwrap_or(candidate));
         }
     }
 
@@ -142,30 +151,42 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
 
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args([
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "user.name=t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .status()
+            .expect("failed to run git");
+        assert!(status.success(), "git {args:?} should succeed");
+    }
+
+    fn init_repo(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-q", "--initial-branch=main"]);
+        git(dir, &["commit", "-q", "--allow-empty", "-m", "init"]);
+    }
+
     fn init_repo_with_worktree(branch: &str, wt_dir: &str) -> (TempDir, PathBuf, PathBuf) {
         let tmp = TempDir::new().expect("failed to create tempdir");
         let root = tmp.path().join("repo");
-        std::fs::create_dir(&root).unwrap();
-        for args in [
-            vec!["init", "-q", "--initial-branch=main"],
-            vec!["commit", "-q", "--allow-empty", "-m", "init"],
-        ] {
-            let status = Command::new("git")
-                .args(["-c", "user.email=t@example.com", "-c", "user.name=t"])
-                .args(&args)
-                .current_dir(&root)
-                .status()
-                .expect("failed to run git");
-            assert!(status.success(), "git {args:?} should succeed");
-        }
+        init_repo(&root);
         let wt_path = tmp.path().join(wt_dir);
-        let status = Command::new("git")
-            .args(["worktree", "add", "-q", "-b", branch])
-            .arg(&wt_path)
-            .current_dir(&root)
-            .status()
-            .expect("failed to run git worktree add");
-        assert!(status.success(), "git worktree add should succeed");
+        git(&root, &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            branch,
+            wt_path.to_str().unwrap(),
+        ]);
         (tmp, root, wt_path)
     }
 
@@ -179,9 +200,34 @@ mod tests {
     #[test]
     fn worktree_branch_reads_checked_out_branch() {
         let (_tmp, root, wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
-        assert_eq!(worktree_branch(&wt_path).as_deref(), Some("feature/foo"));
+        assert_eq!(worktree_branch(&root, &wt_path).as_deref(), Some("feature/foo"));
         // The main worktree has a .git directory, not a file — must not resolve.
-        assert_eq!(worktree_branch(&root), None);
+        assert_eq!(worktree_branch(&root, &root), None);
+    }
+
+    #[test]
+    fn worktree_branch_returns_none_for_detached_head() {
+        let (_tmp, root, wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
+        git(&wt_path, &["checkout", "-q", "--detach"]);
+        assert_eq!(worktree_branch(&root, &wt_path), None);
+    }
+
+    #[test]
+    fn worktree_branch_rejects_worktree_of_another_repo() {
+        let (tmp, _root, wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
+        let other_root = tmp.path().join("other");
+        init_repo(&other_root);
+        // Give the other repo its own worktree so .git/worktrees exists and
+        // the ownership check exercises the path-prefix comparison.
+        git(&other_root, &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "unrelated",
+            tmp.path().join("wt/unrelated").to_str().unwrap(),
+        ]);
+        assert_eq!(worktree_branch(&other_root, &wt_path), None);
     }
 
     #[test]
@@ -189,7 +235,51 @@ mod tests {
         let (tmp, root, wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
         let config = config_for(&tmp.path().join("wt"));
         let resolved = resolve_worktree_with_config(&root, "feature/foo", &config).unwrap();
+        // The fast path canonicalizes to match `git worktree list` output.
+        assert_eq!(resolved, wt_path.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn resolve_worktree_with_config_errors_for_foreign_repo_worktree() {
+        // Two repos share the same worktrees base; the query branch only has a
+        // worktree in the OTHER repo. Resolution must not cross repositories.
+        let (tmp, _root, _wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
+        let other_root = tmp.path().join("other");
+        init_repo(&other_root);
+        let config = config_for(&tmp.path().join("wt"));
+        assert!(resolve_worktree_with_config(&other_root, "feature/foo", &config).is_err());
+    }
+
+    #[test]
+    fn resolve_worktree_with_config_accepts_absolute_path_query() {
+        let (tmp, root, wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
+        let config = config_for(&tmp.path().join("wt"));
+        let resolved =
+            resolve_worktree_with_config(&root, wt_path.to_str().unwrap(), &config).unwrap();
         assert_eq!(resolved, wt_path);
+    }
+
+    #[test]
+    fn resolve_worktree_with_config_fast_path_spawns_no_git() {
+        // Hand-crafted worktree layout with NO functioning git repo: the
+        // fallback (`git worktree list`) would fail here, so success proves
+        // the fast path resolved via file reads alone.
+        let tmp = TempDir::new().expect("failed to create tempdir");
+        let root = tmp.path().join("repo");
+        let gitdir = root.join(".git/worktrees/feature-foo");
+        std::fs::create_dir_all(&gitdir).unwrap();
+        std::fs::write(gitdir.join("HEAD"), "ref: refs/heads/feature/foo\n").unwrap();
+        let wt_path = tmp.path().join("wt/feature-foo");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        std::fs::write(
+            wt_path.join(".git"),
+            format!("gitdir: {}\n", gitdir.display()),
+        )
+        .unwrap();
+
+        let config = config_for(&tmp.path().join("wt"));
+        let resolved = resolve_worktree_with_config(&root, "feature/foo", &config).unwrap();
+        assert_eq!(resolved, wt_path.canonicalize().unwrap());
     }
 
     #[test]
