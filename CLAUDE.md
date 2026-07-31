@@ -35,8 +35,8 @@ git waku clean --dry-run
 
 ### Core modules
 
-- **`src/git.rs`** — Git command wrappers (`git_output`, `git_output_in`, `worktree_list`, `is_merge_noop`, `has_branch_diverged`, `exec_command`). All git interaction goes through here.
-- **`src/worktree.rs`** — Path resolution: `repo_root()` (via `--git-common-dir`), `worktrees_base_with_config()`, `resolve_worktree()` (3-strategy lookup: absolute path → branch name → dir name).
+- **`src/git.rs`** — Git command wrappers (`git_output`, `git_output_in`, `worktree_list`, `is_merge_noop`, `has_branch_diverged`, `exec_command`). All git process invocation goes through here.
+- **`src/worktree.rs`** — Path resolution: `repo_root()` (via `--git-common-dir`), `worktrees_base_with_config()`, `resolve_worktree()` (3-strategy lookup: absolute path → branch name → dir name). `resolve_worktree_with_config()` adds a spawn-free fast path for `open`: it verifies the config-derived path by reading the worktree's `.git` linkage file and `HEAD` directly (deliberate perf exception to the git.rs rule).
 - **`src/cmd/mod.rs`** — Shared utilities: `spinner()` (toggles "ﾜ"/"ｸ"), file operations (`remove_existing`, `cleanup_empty_dirs`, `copy_recursive`), `.worktreeinclude` processing, git config helpers.
 
 ### Key design patterns
