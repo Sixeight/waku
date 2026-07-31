@@ -2460,9 +2460,10 @@ fn config_sets_global_value() {
         .args(["config", "--global", "waku.command.agent", "claude"])
         .current_dir(&repo)
         .env("HOME", &home)
-        // Without this, an inherited XDG_CONFIG_HOME escapes the fake HOME
-        // and the test writes to the developer's real global git config.
+        // Inherited XDG_CONFIG_HOME or GIT_CONFIG_GLOBAL escape the fake HOME
+        // and make the test write to the developer's real global git config.
         .env_remove("XDG_CONFIG_HOME")
+        .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
         .output()
         .expect("failed to run git-waku");
     assert!(
@@ -2476,6 +2477,7 @@ fn config_sets_global_value() {
         .current_dir(&repo)
         .env("HOME", &home)
         .env_remove("XDG_CONFIG_HOME")
+        .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
         .output()
         .unwrap();
     assert!(value.status.success(), "git config --global --get should succeed");
