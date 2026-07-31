@@ -38,8 +38,10 @@ fn parse_git_output(output: &std::process::Output, args: &[&str]) -> Result<Stri
 
 /// Read all git config entries matching a POSIX regexp pattern in a specific directory.
 pub fn config_get_regexp_in(dir: &Path, pattern: &str) -> Result<Vec<(String, String)>> {
+    // -z delimits entries with NUL and key/value with \n, so values
+    // containing newlines survive parsing.
     let output = Command::new("git")
-        .args(["config", "--get-regexp", pattern])
+        .args(["config", "-z", "--get-regexp", pattern])
         .current_dir(dir)
         .output()
         .with_context(|| format!("failed to execute: git config --get-regexp {pattern}"))?;
@@ -52,9 +54,9 @@ pub fn config_get_regexp_in(dir: &Path, pattern: &str) -> Result<Vec<(String, St
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout
-        .lines()
-        .filter_map(|line| {
-            let (key, value) = line.split_once(' ')?;
+        .split('\0')
+        .filter_map(|entry| {
+            let (key, value) = entry.split_once('\n')?;
             Some((key.to_string(), value.to_string()))
         })
         .collect())
@@ -63,23 +65,6 @@ pub fn config_get_regexp_in(dir: &Path, pattern: &str) -> Result<Vec<(String, St
 /// Read all git config entries matching a POSIX regexp pattern in one call.
 pub fn config_get_regexp(pattern: &str) -> Result<Vec<(String, String)>> {
     config_get_regexp_in(&std::env::current_dir()?, pattern)
-}
-
-/// Read the effective value for a git config key in a specific directory.
-pub fn config_get_in(dir: &Path, key: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .args(["config", "--get", key])
-        .current_dir(dir)
-        .output()
-        .with_context(|| format!("failed to execute: git config --get {key}"))?;
-    if !output.status.success() {
-        if output.status.code() == Some(1) {
-            return Ok(None);
-        }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git config --get {key} failed: {}", stderr.trim());
-    }
-    Ok(Some(String::from_utf8_lossy(&output.stdout).trim().to_string()))
 }
 
 /// Load the first-parent commit hashes of `ref_name` into a HashSet.
@@ -209,4 +194,35 @@ pub fn git_passthrough(args: &[String]) -> Result<i32> {
         .status()
         .with_context(|| format!("failed to execute: git {}", child_args.join(" ")))?;
     Ok(status.code().unwrap_or(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn config_get_regexp_in_preserves_newlines_in_values() {
+        let tmp = TempDir::new().expect("failed to create tempdir");
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "waku.command.editor", "nvim\n--clean"],
+        ] {
+            let status = Command::new("git")
+                .args(&args)
+                .current_dir(tmp.path())
+                .status()
+                .expect("failed to run git");
+            assert!(status.success(), "git {args:?} should succeed");
+        }
+
+        // The ambient global config may add unrelated waku.* entries; only
+        // the key set above matters here.
+        let entries = config_get_regexp_in(tmp.path(), r"^waku\.").unwrap();
+        let value = entries
+            .iter()
+            .find(|(k, _)| k == "waku.command.editor")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(value, Some("nvim\n--clean"));
+    }
 }

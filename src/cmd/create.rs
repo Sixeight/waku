@@ -93,16 +93,16 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     run_post_create_hooks(&wt_path, &waku_config, opts.quiet)?;
 
     if opts.agent {
-        let (cmd, args) = super::resolve_tool_command_with_override_in(
-            &root,
+        let (cmd, args) = super::resolve_tool_command_with_override(
+            &waku_config,
             "agent",
             opts.agent_command.as_deref(),
         )?;
         let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
         git::exec_command(&cmd, &args, &wt_path)?;
     } else if opts.editor {
-        let (cmd, args) = super::resolve_tool_command_with_override_in(
-            &root,
+        let (cmd, args) = super::resolve_tool_command_with_override(
+            &waku_config,
             "editor",
             opts.editor_command.as_deref(),
         )?;

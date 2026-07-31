@@ -6,7 +6,6 @@ pub mod path;
 pub mod remove;
 
 use std::collections::HashSet;
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -14,7 +13,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::{git, worktree};
+use crate::git;
 
 pub const SPINNER_TEMPLATE: &str = "  {prefix} {msg:.dim}{spinner:.dim}";
 
@@ -68,14 +67,6 @@ pub fn remove_existing(path: &Path) -> Result<()> {
             .with_context(|| format!("failed to remove existing: {}", path.display()))?;
     }
     Ok(())
-}
-
-/// Resolve a branch name to a worktree directory, falling back to the current directory.
-pub fn resolve_dir(branch: Option<&str>) -> Result<PathBuf> {
-    match branch {
-        Some(b) => worktree::resolve_worktree(b),
-        None => Ok(env::current_dir()?),
-    }
 }
 
 /// Remove a directory if it is empty.
@@ -144,24 +135,9 @@ pub fn resolve_tool(config: &[(String, String)], tool: &str) -> String {
         })
 }
 
-/// Resolve the configured command line for a tool from a repository root.
-pub fn resolve_tool_in(root: &Path, tool: &str) -> Result<String> {
-    let key = format!("waku.command.{tool}");
-    Ok(git::config_get_in(root, &key)?.unwrap_or_else(|| match tool {
-        "agent" => "claude".to_string(),
-        _ => "nvim".to_string(),
-    }))
-}
-
 /// Resolve the command and configured arguments for a tool.
 pub fn resolve_tool_command(config: &[(String, String)], tool: &str) -> Result<(String, Vec<String>)> {
     let command_line = resolve_tool(config, tool);
-    parse_command_line(&command_line)
-}
-
-/// Resolve the command and configured arguments for a tool from a repository root.
-pub fn resolve_tool_command_in(root: &Path, tool: &str) -> Result<(String, Vec<String>)> {
-    let command_line = resolve_tool_in(root, tool)?;
     parse_command_line(&command_line)
 }
 
@@ -174,18 +150,6 @@ pub fn resolve_tool_command_with_override(
     match command_override {
         Some(command_line) => parse_command_line(command_line),
         None => resolve_tool_command(config, tool),
-    }
-}
-
-/// Resolve a command line, preferring a one-time command override over configuration.
-pub fn resolve_tool_command_with_override_in(
-    root: &Path,
-    tool: &str,
-    command_override: Option<&str>,
-) -> Result<(String, Vec<String>)> {
-    match command_override {
-        Some(command_line) => parse_command_line(command_line),
-        None => resolve_tool_command_in(root, tool),
     }
 }
 
@@ -519,21 +483,8 @@ pub fn copy_recursive(src: &Path, dst: &Path, excludes: &[PathBuf]) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
-
     use super::*;
     use tempfile::TempDir;
-
-    fn init_repo() -> TempDir {
-        let tmp = TempDir::new().expect("failed to create tempdir");
-        let status = Command::new("git")
-            .args(["init", "--initial-branch=main"])
-            .current_dir(tmp.path())
-            .status()
-            .expect("failed to run git init");
-        assert!(status.success(), "git init should succeed");
-        tmp
-    }
 
     #[test]
     fn extract_git_detail_strips_fatal_prefix() {
@@ -618,37 +569,6 @@ mod tests {
         let (program, args) = resolve_tool_command(&config, "agent").unwrap();
         assert_eq!(program, "claude");
         assert_eq!(args, vec!["--append", "hello world"]);
-    }
-
-    #[test]
-    fn resolve_tool_in_reads_configured_tool_from_repo_root() {
-        let repo = init_repo();
-        let status = Command::new("git")
-            .args(["config", "waku.command.editor", "hx"])
-            .current_dir(repo.path())
-            .status()
-            .expect("failed to run git config");
-        assert!(status.success(), "git config should succeed");
-
-        let tool = resolve_tool_in(repo.path(), "editor").unwrap();
-
-        assert_eq!(tool, "hx");
-    }
-
-    #[test]
-    fn resolve_tool_command_in_splits_configured_arguments_from_repo_root() {
-        let repo = init_repo();
-        let status = Command::new("git")
-            .args(["config", "waku.command.agent", "claude --resume --model sonnet"])
-            .current_dir(repo.path())
-            .status()
-            .expect("failed to run git config");
-        assert!(status.success(), "git config should succeed");
-
-        let (program, args) = resolve_tool_command_in(repo.path(), "agent").unwrap();
-
-        assert_eq!(program, "claude");
-        assert_eq!(args, vec!["--resume", "--model", "sonnet"]);
     }
 
     #[test]
