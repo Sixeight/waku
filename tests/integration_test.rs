@@ -558,7 +558,11 @@ fn clean_dry_run_shows_dirty_worktrees() {
         "should show dirty worktree: {stdout}"
     );
     assert!(
-        stdout.contains("feature-dry-dirty | dirty,"),
+        stdout.lines().any(|line| {
+            line.contains("feature-dry-dirty")
+                && line.contains("merged")
+                && line.contains("dirty")
+        }),
         "should mark dirty worktree with commit info: {stdout}"
     );
     assert!(
@@ -583,8 +587,8 @@ fn clean_dry_run_shows_unchanged_worktrees() {
         "should show unchanged worktree: {stdout}"
     );
     assert!(
-        stdout.contains("no changes"),
-        "should mark unchanged worktree with no changes: {stdout}"
+        stdout.contains("unchanged") && stdout.contains("0 unique"),
+        "should mark unchanged worktree with no unique commits: {stdout}"
     );
     assert!(
         stdout.contains("initial"),
@@ -955,7 +959,7 @@ fn clean_force_removes_dirty_worktree() {
 }
 
 #[test]
-fn clean_removes_detached_worktree() {
+fn clean_yes_keeps_detached_worktree_with_unique_commits() {
     let (_tmp, repo) = setup_repo();
 
     // Create a worktree, add a commit, then detach it and delete the branch
@@ -975,7 +979,30 @@ fn clean_removes_detached_worktree() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert!(!wt_path.exists(), "detached worktree should be removed");
+    assert!(
+        wt_path.exists(),
+        "detached worktree with unique commits should be kept"
+    );
+}
+
+#[test]
+fn clean_removes_detached_worktree_without_unique_commits() {
+    let (_tmp, repo) = setup_repo();
+
+    run_waku(&repo, &["create", "feature-detached-empty"]);
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-detached-empty");
+    run_git(&wt_path, &["checkout", "--detach"]);
+    run_git(&repo, &["branch", "-D", "feature-detached-empty"]);
+
+    let output = run_waku(&repo, &["clean", "--yes"]);
+    assert!(output.status.success());
+    assert!(
+        !wt_path.exists(),
+        "detached worktree without unique commits should be removed"
+    );
 }
 
 #[test]
@@ -1825,8 +1852,8 @@ fn clean_dry_run_dirty_and_unchanged() {
         "should show dirty label: {stdout}"
     );
     assert!(
-        stdout.contains("no changes"),
-        "should also show no changes when dirty and unchanged: {stdout}"
+        stdout.contains("unchanged") && stdout.contains("0 unique"),
+        "should also show unchanged with no unique commits: {stdout}"
     );
 }
 
@@ -2486,7 +2513,7 @@ fn config_sets_global_value() {
 // --- Gone branch (closed PR) tests ---
 
 #[test]
-fn clean_removes_gone_branch_worktree() {
+fn clean_yes_keeps_gone_branch_with_unique_commits() {
     let (_tmp, repo, bare) = setup_repo_with_remote();
 
     // Create a worktree with a branch that tracks origin
@@ -2510,20 +2537,17 @@ fn clean_removes_gone_branch_worktree() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert!(
-        !wt_path.exists(),
-        "gone branch worktree should be removed"
-    );
+    assert!(wt_path.exists(), "gone branch with unique commits should be kept");
 
-    // Branch should also be deleted
+    // The local branch is preserved with the worktree.
     let branch_check = Command::new("git")
         .args(["rev-parse", "--verify", "refs/heads/feature-gone"])
         .current_dir(&repo)
         .output()
         .unwrap();
     assert!(
-        !branch_check.status.success(),
-        "branch should be deleted after clean"
+        branch_check.status.success(),
+        "branch with unique commits should be kept"
     );
 }
 
@@ -2549,8 +2573,17 @@ fn clean_dry_run_shows_closed_label() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("closed"),
-        "dry-run should show 'closed' label: {stdout}"
+        stdout.contains("BRANCH")
+            && stdout.contains("REASON")
+            && stdout.contains("FILES")
+            && stdout.contains("COMMITS")
+            && stdout.contains("UPDATED")
+            && stdout.contains("SUBJECT"),
+        "dry-run should show decision-oriented columns: {stdout}"
+    );
+    assert!(
+        stdout.contains("closed") && stdout.contains("1 unique") && stdout.contains("clean"),
+        "dry-run should show why the worktree needs review: {stdout}"
     );
     assert!(
         wt_path.exists(),

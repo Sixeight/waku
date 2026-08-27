@@ -69,9 +69,16 @@ git waku clean --yes                        # skip confirmation
 git waku clean --yes --force                # also remove dirty worktrees
 ```
 
-Detects both regular merges and squash merges. Detached worktrees (where the branch has been deleted) are also included. Dirty worktrees appear in the list marked as `(dirty)` and are unchecked by default — you can select them to force-remove, or use `--force` to include them all.
+The candidate table separates the information needed to decide whether each worktree is safe to remove:
 
-Branches that have not diverged from main (no unique commits) are treated as "not yet started" and skipped. As a side effect, fast-forward merged branches are also skipped — use `git waku remove` to remove them manually.
+- `REASON`: `merged`, `closed`, `detached`, or `unchanged`
+- `FILES`: `clean` or `dirty`
+- `COMMITS`: whether the branch is merged, or how many commits are unique to the worktree
+- `UPDATED` / `SUBJECT`: the latest commit (hidden on narrow terminals to preserve the safety columns)
+
+`[✔]` marks worktrees selected for removal by default. Regular and squash-merged worktrees are selected when clean. Dirty worktrees, unchanged worktrees, and closed or detached worktrees with unique commits are left unchecked. If the unique commit count cannot be determined, the worktree is also left unchecked.
+
+`--force` allows dirty worktrees to be removed, but does not automatically select closed or detached worktrees that still have unique commits. Branches that have not diverged from main are reported as `unchanged`; fast-forward merged branches can fall into this category and remain unchecked. Use `git waku remove` or select them explicitly when appropriate.
 
 ### Passthrough
 

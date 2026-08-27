@@ -50,7 +50,10 @@ pub fn config_get_regexp_in(dir: &Path, pattern: &str) -> Result<Vec<(String, St
             return Ok(vec![]);
         }
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("git config --get-regexp {pattern} failed: {}", stderr.trim());
+        bail!(
+            "git config --get-regexp {pattern} failed: {}",
+            stderr.trim()
+        );
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout
@@ -78,19 +81,35 @@ pub fn first_parent_commits(dir: &Path, ref_name: &str) -> HashSet<String> {
 }
 
 pub fn branch_exists(dir: &Path, branch: &str) -> bool {
-    git_output_in(dir, &["rev-parse", "--verify", &format!("refs/heads/{branch}")]).is_ok()
+    git_output_in(
+        dir,
+        &["rev-parse", "--verify", &format!("refs/heads/{branch}")],
+    )
+    .is_ok()
 }
 
 pub fn remote_branch_exists(dir: &Path, branch: &str) -> bool {
     git_output_in(
         dir,
-        &["rev-parse", "--verify", &format!("refs/remotes/origin/{branch}")],
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("refs/remotes/origin/{branch}"),
+        ],
     )
     .is_ok()
 }
 
 pub fn remote_default_branch_ref(dir: &Path) -> Result<String> {
-    git_output_in(dir, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"])
+    git_output_in(
+        dir,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+    )
 }
 
 /// Check if a branch's upstream tracking ref has been deleted (gone).
@@ -106,11 +125,7 @@ pub fn has_upstream_gone(dir: &Path, branch: &str) -> bool {
 
 /// Check if a branch has diverged from main's first-parent line.
 /// `first_parents` should be pre-computed via `first_parent_commits`.
-pub fn has_branch_diverged(
-    dir: &Path,
-    first_parents: &HashSet<String>,
-    branch: &str,
-) -> bool {
+pub fn has_branch_diverged(dir: &Path, first_parents: &HashSet<String>, branch: &str) -> bool {
     let branch_tip = match git_output_in(dir, &["rev-parse", branch]) {
         Ok(tip) => tip,
         Err(_) => return false,
@@ -146,6 +161,13 @@ pub fn last_commit_info(dir: &Path) -> Option<(String, String)> {
     Some((date.to_string(), subject.to_string()))
 }
 
+/// Return commits reachable from HEAD but not from any target ref.
+pub fn unique_commit_count(dir: &Path, target_refs: &[String]) -> Option<usize> {
+    let mut args = vec!["rev-list", "--count", "HEAD", "--not"];
+    args.extend(target_refs.iter().map(String::as_str));
+    git_output_in(dir, &args).ok()?.parse::<usize>().ok()
+}
+
 /// Parse `git worktree list --porcelain` output into (path, branch) pairs.
 pub fn worktree_list(dir: &Path) -> Result<Vec<(String, Option<String>)>> {
     let raw = git_output_in(dir, &["worktree", "list", "--porcelain"])?;
@@ -178,10 +200,7 @@ pub fn worktree_list(dir: &Path) -> Result<Vec<(String, Option<String>)>> {
 /// Execute a command, replacing the current process (Unix exec).
 pub fn exec_command(program: &str, args: &[&str], dir: &Path) -> Result<()> {
     use std::os::unix::process::CommandExt;
-    let err = Command::new(program)
-        .args(args)
-        .current_dir(dir)
-        .exec();
+    let err = Command::new(program).args(args).current_dir(dir).exec();
     bail!("exec {} failed: {}", program, err)
 }
 
@@ -224,5 +243,37 @@ mod tests {
             .find(|(k, _)| k == "waku.command.editor")
             .map(|(_, v)| v.as_str());
         assert_eq!(value, Some("nvim\n--clean"));
+    }
+
+    #[test]
+    fn unique_commit_count_excludes_union_of_target_histories() {
+        let tmp = TempDir::new().expect("failed to create tempdir");
+        let repo = tmp.path();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test"],
+            vec!["commit", "--allow-empty", "-q", "-m", "initial"],
+            vec!["checkout", "-q", "-b", "target-a"],
+            vec!["commit", "--allow-empty", "-q", "-m", "target a"],
+            vec!["branch", "combined"],
+            vec!["checkout", "-q", "main"],
+            vec!["checkout", "-q", "-b", "target-b"],
+            vec!["commit", "--allow-empty", "-q", "-m", "target b"],
+            vec!["checkout", "-q", "combined"],
+            vec!["merge", "-q", "--no-ff", "target-b", "-m", "merge targets"],
+        ] {
+            let status = Command::new("git")
+                .args(&args)
+                .current_dir(repo)
+                .status()
+                .expect("failed to run git");
+            assert!(status.success(), "git {args:?} should succeed");
+        }
+
+        assert_eq!(
+            unique_commit_count(repo, &["target-a".to_string(), "target-b".to_string()]),
+            Some(1)
+        );
     }
 }
