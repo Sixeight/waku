@@ -6,6 +6,10 @@ use console::{measure_text_width, style, truncate_str, Key, Term};
 use super::{cleanup_empty_dirs, print_warning, spinner};
 use crate::{git, worktree};
 
+mod selector;
+
+use selector::{SelectorDisplay, SelectorUpdate};
+
 struct WorktreeAnnotations<'a> {
     dirty: &'a HashSet<String>,
     unchanged: &'a HashSet<String>,
@@ -375,62 +379,59 @@ fn select_worktrees(
         .iter()
         .map(|(path, branch)| initially_checked(path, branch.as_deref(), ann))
         .collect();
+    let mut selected_count = checked.iter().filter(|value| **value).count();
     let mut cursor = count;
-    let lines = count + 3;
+    let mut display = SelectorDisplay::new(&term, items, ann, cursor);
 
     term.hide_cursor()?;
-    draw_selector(&term, items, &checked, ann, cursor);
-
-    let result = loop {
-        match term.read_key()? {
-            Key::ArrowUp | Key::Char('k') if cursor > 0 => cursor -= 1,
-            Key::ArrowDown | Key::Char('j') if cursor < count => cursor += 1,
-            Key::Char(' ') if cursor < count => checked[cursor] = !checked[cursor],
-            Key::Enter if cursor == count => {
-                term.clear_last_lines(lines)?;
-                break Ok(items
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| checked[*i])
-                    .map(|(_, item)| item.clone())
-                    .collect());
+    let result = (|| -> Result<Vec<(String, Option<String>)>> {
+        display.draw(&term, &checked, cursor, selected_count)?;
+        loop {
+            let previous_cursor = cursor;
+            match term.read_key()? {
+                Key::ArrowUp | Key::Char('k') if cursor > 0 => cursor -= 1,
+                Key::ArrowDown | Key::Char('j') if cursor < count => cursor += 1,
+                Key::Char(' ') if cursor < count => {
+                    checked[cursor] = !checked[cursor];
+                    if checked[cursor] {
+                        selected_count += 1;
+                    } else {
+                        selected_count -= 1;
+                    }
+                }
+                Key::Enter if cursor == count => {
+                    term.clear_last_lines(display.line_count())?;
+                    break Ok(items
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| checked[*i])
+                        .map(|(_, item)| item.clone())
+                        .collect());
+                }
+                Key::Escape | Key::Char('q') => {
+                    term.clear_last_lines(display.line_count())?;
+                    break Ok(vec![]);
+                }
+                _ => continue,
             }
-            Key::Escape | Key::Char('q') => {
-                term.clear_last_lines(lines)?;
-                break Ok(vec![]);
-            }
-            _ => continue,
+            display.update(
+                &term,
+                items,
+                ann,
+                SelectorUpdate {
+                    checked: &checked,
+                    previous_cursor,
+                    cursor,
+                    selected_count,
+                },
+            )?;
         }
-        term.clear_last_lines(lines)?;
-        draw_selector(&term, items, &checked, ann, cursor);
-    };
-    term.show_cursor()?;
+    })();
+    let cursor_result = term.show_cursor();
+    if result.is_ok() {
+        cursor_result?;
+    }
     result
-}
-
-fn draw_selector(
-    term: &Term,
-    items: &[(String, Option<String>)],
-    checked: &[bool],
-    ann: &WorktreeAnnotations,
-    cursor: usize,
-) {
-    let layout = table_layout(items, ann, usize::from(term.size().1).saturating_sub(4));
-    let _ = term.write_line(&candidate_title(layout.row_width));
-    let _ = term.write_line(&format!("    {}", table_header(&layout)));
-    for (i, (path, branch)) in items.iter().enumerate() {
-        let row = worktree_row(path, branch.as_deref(), ann, &layout, checked[i]);
-        if cursor == i {
-            let _ = term.write_line(&format!("  {} {row}", style("▸").bold()));
-        } else {
-            let _ = term.write_line(&format!("    {row}"));
-        }
-    }
-    if cursor == items.len() {
-        let _ = term.write_line(&format!("  {} {}", style("▸").bold(), style("run").bold()));
-    } else {
-        let _ = term.write_line(&format!("    {}", style("run").dim()));
-    }
 }
 
 fn display_name(path: &str, branch: Option<&str>) -> String {
