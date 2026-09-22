@@ -4,7 +4,7 @@ use anyhow::Result;
 use console::{measure_text_width, style, truncate_str, Key, Term};
 
 use super::{cleanup_empty_dirs, print_warning, spinner};
-use crate::{git, worktree};
+use crate::{git, parallel, worktree};
 
 mod selector;
 
@@ -46,41 +46,70 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     let sp = spinner("Fetching remote".into());
     let (_fetch_result, worktrees) = std::thread::scope(|s| {
         let fetch_handle = s.spawn(|| git::git_output_in(&root, &["fetch", "--prune"]));
-        let wt_handle = s.spawn(|| git::worktree_list(&root));
+        let wt_handle = s.spawn(|| git::worktree_details(&root));
         (fetch_handle.join().unwrap(), wt_handle.join().unwrap())
     });
-    let worktrees = worktrees?;
+    let worktree_details = worktrees?;
     sp.finish_and_clear();
     eprintln!("  {} Fetched remote", style("✔").green());
+
+    let root_str = root.to_string_lossy().to_string();
+    if worktree_details
+        .iter()
+        .all(|worktree| worktree.path == root_str)
+    {
+        println!("No worktrees to clean.");
+        return Ok(());
+    }
+    let worktrees: Vec<_> = worktree_details
+        .iter()
+        .map(|worktree| (worktree.path.clone(), worktree.branch.clone()))
+        .collect();
+    let heads: HashMap<_, _> = worktree_details
+        .iter()
+        .filter_map(|worktree| {
+            worktree
+                .head
+                .as_ref()
+                .map(|head| (worktree.path.as_str(), head.as_str()))
+        })
+        .collect();
+    let (ref_oids, config) = std::thread::scope(|s| {
+        let refs = s.spawn(|| git::ref_oids(&root).ok());
+        let config = s.spawn(|| git::config_get_regexp_in(&root, r"^(waku\.|branch\..*\.remote$)"));
+        (refs.join().unwrap(), config.join().unwrap())
+    });
+    let waku_config = config?;
 
     let mut check_refs = vec![main_branch.clone()];
     if let Some(ref u) = upstream {
         check_refs.push(u.clone());
     }
 
-    // Run `git branch --merged` for each ref in parallel
-    let merged_branches: Vec<String> = std::thread::scope(|s| {
-        let handles: Vec<_> = check_refs
-            .iter()
-            .map(|check_ref| {
-                s.spawn(|| git::git_output_in(&root, &["branch", "--merged", check_ref]))
-            })
-            .collect();
-        let mut merged = Vec::new();
-        for handle in handles {
-            if let Ok(output) = handle.join().unwrap() {
-                for b in parse_branch_list(&output, &main_branch) {
-                    if !merged.contains(&b) {
-                        merged.push(b);
-                    }
-                }
-            }
+    let mut target_commits = HashSet::new();
+    let mut merge_targets = Vec::new();
+    check_refs.retain(|reference| {
+        let Ok(target) = git::merge_target(&root, reference) else {
+            return true;
+        };
+        if !target_commits.insert(target.commit.clone()) {
+            return false;
         }
-        merged
+        merge_targets.push(target);
+        true
     });
 
+    // Run `git branch --merged` for each ref in parallel
+    let merged_branches: HashSet<String> = parallel::map(&check_refs, |check_ref| {
+        git::git_output_in(&root, &["branch", "--merged", check_ref])
+            .map(|output| parse_branch_list(&output, &main_branch))
+            .unwrap_or_default()
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+
     // Separate branched and detached worktrees
-    let root_str = root.to_string_lossy().to_string();
     let mut detached: Vec<String> = Vec::new();
     let candidates: Vec<_> = worktrees
         .iter()
@@ -93,7 +122,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
                     return None;
                 }
             };
-            if merged_branches.iter().any(|b| b == branch) {
+            if merged_branches.contains(branch) {
                 return Some((path.clone(), branch.clone(), true));
             }
             Some((path.clone(), branch.clone(), false))
@@ -101,46 +130,48 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         .collect();
 
     // Run is_merge_noop in parallel for unresolved candidates
-    let merged_candidates: Vec<(String, String)> = std::thread::scope(|s| {
-        let handles: Vec<_> = candidates
+    let unresolved: Vec<_> = candidates
+        .iter()
+        .filter(|(_, _, already_merged)| !already_merged)
+        .collect();
+    let merged_results = parallel::map(&unresolved, |(_, branch, _)| {
+        merge_targets
             .iter()
-            .filter(|(_, _, already_merged)| !already_merged)
-            .map(|(path, branch, _)| {
-                s.spawn(|| {
-                    let merged = check_refs
-                        .iter()
-                        .any(|r| git::is_merge_noop(&root, r, branch).unwrap_or(false));
-                    (path.clone(), branch.clone(), merged)
-                })
-            })
-            .collect();
-        let mut result: Vec<_> = candidates
-            .iter()
-            .filter(|(_, _, already_merged)| *already_merged)
-            .map(|(p, b, _)| (p.clone(), b.clone()))
-            .collect();
-        for handle in handles {
-            let (path, branch, merged) = handle.join().unwrap();
-            if merged {
-                result.push((path, branch));
-            }
-        }
-        result
+            .any(|target| git::is_merge_noop_with_target(&root, target, branch).unwrap_or(false))
     });
+    let merged_candidates: Vec<(String, String)> = candidates
+        .iter()
+        .filter(|(_, _, already_merged)| *already_merged)
+        .map(|(p, b, _)| (p.clone(), b.clone()))
+        .chain(
+            unresolved
+                .iter()
+                .zip(merged_results)
+                .filter(|(_, merged)| *merged)
+                .map(|((path, branch, _), _)| (path.clone(), branch.clone())),
+        )
+        .collect();
 
     // Filter out branches that haven't diverged from their fork point.
     // A branch with no unique commits since creation is "not yet started", not "merged".
     // These unchanged worktrees are still included as candidates but marked separately.
-    let first_parents = git::first_parent_commits(&root, &main_branch);
+    let first_parents = if merged_candidates.is_empty() {
+        HashSet::new()
+    } else {
+        git::first_parent_commits(&root, &main_branch)
+    };
     let mut unchanged_set: HashSet<String> = HashSet::new();
     let mut to_remove: Vec<(String, Option<String>)> = Vec::new();
     for (path, branch) in merged_candidates {
-        if git::has_branch_diverged(&root, &first_parents, &branch) {
-            to_remove.push((path, Some(branch)));
-        } else {
+        let diverged = ref_oids
+            .as_ref()
+            .and_then(|refs| refs.get(&format!("refs/heads/{branch}")))
+            .map(|tip| !first_parents.contains(tip))
+            .unwrap_or_else(|| git::has_branch_diverged(&root, &first_parents, &branch));
+        if !diverged {
             unchanged_set.insert(path.clone());
-            to_remove.push((path, Some(branch)));
         }
+        to_remove.push((path, Some(branch)));
     }
 
     // Detached worktrees have no branch — always candidates for removal
@@ -157,25 +188,24 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         .filter_map(|(path, branch)| branch.as_ref().map(|b| (path.clone(), b.clone())))
         .collect();
 
-    let gone_set: HashSet<String> = std::thread::scope(|s| {
-        let handles: Vec<_> = gone_candidates
-            .iter()
-            .map(|(path, branch)| {
-                s.spawn(|| {
-                    let gone = git::has_upstream_gone(&root, branch);
-                    (path.clone(), gone)
-                })
-            })
-            .collect();
-        let mut set = HashSet::new();
-        for h in handles {
-            let (path, gone) = h.join().unwrap();
-            if gone {
-                set.insert(path);
+    let branch_remotes: HashMap<_, _> = waku_config
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    let gone_set: HashSet<String> = gone_candidates
+        .iter()
+        .filter(|(_, branch)| {
+            if let Some(refs) = &ref_oids {
+                branch_remotes
+                    .get(format!("branch.{branch}.remote").as_str())
+                    .is_some_and(|remote| !remote.trim().is_empty())
+                    && !refs.contains_key(&format!("refs/remotes/origin/{branch}"))
+            } else {
+                git::has_upstream_gone(&root, branch)
             }
-        }
-        set
-    });
+        })
+        .map(|(path, _)| path.clone())
+        .collect();
 
     for (path, branch) in &gone_candidates {
         if gone_set.contains(path) {
@@ -183,44 +213,46 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         }
     }
 
+    let commit_ids: HashSet<_> = to_remove
+        .iter()
+        .filter_map(|(path, _)| heads.get(path.as_str()).copied())
+        .collect();
+    let commit_ids: Vec<_> = commit_ids.into_iter().collect();
+    let commits_by_oid = git::commit_info(&root, &commit_ids).unwrap_or_default();
+
     // Dirty check + commit info in parallel
-    let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
     let (dirty_set, commit_info, unique_commits): (
         HashSet<String>,
         HashMap<String, CommitInfo>,
         HashMap<String, usize>,
-    ) = std::thread::scope(|s| {
-        let handles: Vec<_> = to_remove
-            .iter()
-            .map(|(path, branch)| {
-                let config_ref = &waku_config;
-                let target_refs = &check_refs;
-                let is_unchanged = unchanged_set.contains(path);
-                let needs_unique_count = gone_set.contains(path) || branch.is_none();
-                s.spawn(move || {
-                    let wt_path = std::path::Path::new(path);
-                    let is_dirty = if yes && force && !dry_run {
-                        false
-                    } else {
-                        super::remove::is_worktree_dirty(wt_path, config_ref)
-                    };
-                    let commit = git::last_commit_info(wt_path);
-                    let unique_count = if is_unchanged {
-                        Some(0)
-                    } else if needs_unique_count {
-                        git::unique_commit_count(wt_path, target_refs)
-                    } else {
-                        None
-                    };
-                    (path.clone(), is_dirty, commit, unique_count)
-                })
-            })
-            .collect();
+    ) = {
+        let results = parallel::map(&to_remove, |(path, branch)| {
+            let is_unchanged = unchanged_set.contains(path);
+            let needs_unique_count = gone_set.contains(path) || branch.is_none();
+            let wt_path = std::path::Path::new(path);
+            let is_dirty = if yes && force && !dry_run {
+                false
+            } else {
+                super::remove::is_worktree_dirty(wt_path, &waku_config)
+            };
+            let commit = heads
+                .get(path.as_str())
+                .and_then(|head| commits_by_oid.get(*head))
+                .cloned()
+                .or_else(|| git::last_commit_info(wt_path));
+            let unique_count = if is_unchanged {
+                Some(0)
+            } else if needs_unique_count {
+                git::unique_commit_count(wt_path, &check_refs)
+            } else {
+                None
+            };
+            (path.clone(), is_dirty, commit, unique_count)
+        });
         let mut dirty = HashSet::new();
         let mut commits = HashMap::new();
         let mut unique_commits = HashMap::new();
-        for h in handles {
-            let (path, is_dirty, commit, unique_count) = h.join().unwrap();
+        for (path, is_dirty, commit, unique_count) in results {
             if is_dirty {
                 dirty.insert(path.clone());
             }
@@ -239,7 +271,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
             }
         }
         (dirty, commits, unique_commits)
-    });
+    };
 
     // Summary of found worktrees
     let unchanged_count = unchanged_set.len();

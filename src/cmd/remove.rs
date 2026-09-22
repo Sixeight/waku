@@ -8,15 +8,14 @@ use crate::{git, worktree};
 
 pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
     let root = worktree::repo_root()?;
-    let path = worktree::resolve_worktree(query)?;
+    let worktrees = git::worktree_list(&root)?;
+    let path = worktree::resolve_worktree_from_list(query, &worktrees)?;
 
     let path_str = path.to_string_lossy().to_string();
     if path_str == root.to_string_lossy().as_ref() {
         bail!("cannot remove the main worktree");
     }
 
-    // Find the branch for this worktree
-    let worktrees = git::worktree_list(&root)?;
     let branch = worktrees
         .iter()
         .find(|(p, _)| p == &path_str)
@@ -24,8 +23,7 @@ pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
 
     let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
 
-    // Check for real modifications (waku artifacts like symlinks make
-    // git status noisy, so use diff + ls-files and exclude waku entries)
+    // Waku artifacts are expected to differ from the checked-out revision.
     if !force && is_worktree_dirty(&path, &waku_config) {
         bail!(
             "'{}' contains modified or untracked files, use --force to delete",
@@ -40,10 +38,7 @@ pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
     let sp = spinner("Removing worktree".into());
     git::git_output_in(&root, &["worktree", "remove", "--force", &path_str])?;
     sp.finish_and_clear();
-    eprintln!(
-        "  {} Removed worktree",
-        console::style("✔").green(),
-    );
+    eprintln!("  {} Removed worktree", console::style("✔").green(),);
 
     // Delete the branch unless --keep-branch
     if !keep_branch {
@@ -89,22 +84,49 @@ pub fn is_worktree_dirty(path: &Path, config: &[(String, String)]) -> bool {
     let waku_prefixes: Vec<String> = waku_entries.iter().map(|e| format!("{e}/")).collect();
 
     let is_waku_artifact = |line: &str| -> bool {
-        waku_entries.contains(line)
-            || waku_prefixes.iter().any(|p| line.starts_with(p.as_str()))
+        waku_entries.contains(line) || waku_prefixes.iter().any(|p| line.starts_with(p.as_str()))
     };
 
-    let tracked = match git::git_output_in(path, &["diff", "--name-only", "HEAD"]) {
+    let status = match git::git_output_raw_in(
+        path,
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+            "--no-renames",
+        ],
+    ) {
         Ok(output) => output,
         Err(_) => return true,
     };
-    if tracked.lines().any(|line| !is_waku_artifact(line)) {
-        return true;
+    status_is_dirty(&status, is_waku_artifact)
+}
+
+fn status_is_dirty(status: &[u8], is_waku_artifact: impl Fn(&str) -> bool) -> bool {
+    let status = match std::str::from_utf8(status) {
+        Ok(status) => status,
+        Err(_) => return true,
+    };
+    status.split_terminator('\0').any(|entry| {
+        let bytes = entry.as_bytes();
+        bytes.len() < 4
+            || bytes[2] != b' '
+            || bytes[..2].iter().any(|s| !b" MADTU?!".contains(s))
+            || !is_waku_artifact(&entry[3..])
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn status_parse_errors_are_dirty_even_when_artifacts_are_excluded() {
+        for status in [b"?? \xff\0".as_slice(), b"?\0", b"??\0", b"XY file\0"] {
+            assert!(status_is_dirty(status, |_| true), "{status:?}");
+        }
     }
-
-    let untracked = match git::git_output_in(path, &["ls-files", "--others", "--exclude-standard"])
-    {
-        Ok(output) => output,
-        Err(_) => return true,
-    };
-    untracked.lines().any(|line| !is_waku_artifact(line))
 }

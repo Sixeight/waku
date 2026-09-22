@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::git;
@@ -74,10 +74,9 @@ pub fn cleanup_empty_dirs(dir: &Path) -> Result<()> {
     if !dir.is_dir() {
         return Ok(());
     }
-    let entries: Vec<_> = fs::read_dir(dir)
-        .with_context(|| format!("failed to read dir: {}", dir.display()))?
-        .collect::<Result<Vec<_>, _>>()?;
-    if entries.is_empty() {
+    let mut entries =
+        fs::read_dir(dir).with_context(|| format!("failed to read dir: {}", dir.display()))?;
+    if entries.next().transpose()?.is_none() {
         fs::remove_dir(dir)
             .with_context(|| format!("failed to remove empty dir: {}", dir.display()))?;
     }
@@ -108,16 +107,8 @@ pub fn extract_git_detail(error: &anyhow::Error) -> String {
 pub fn print_warning(context: &str, error: &anyhow::Error) {
     use console::style;
     let detail = extract_git_detail(error);
-    eprintln!(
-        "{}: {}",
-        style("warning").yellow().bold(),
-        context
-    );
-    eprintln!(
-        "      {} {}",
-        style("→").dim(),
-        detail
-    );
+    eprintln!("{}: {}", style("warning").yellow().bold(), context);
+    eprintln!("      {} {}", style("→").dim(), detail);
 }
 
 /// Resolve the configured command line for a tool, with defaults.
@@ -136,7 +127,10 @@ pub fn resolve_tool(config: &[(String, String)], tool: &str) -> String {
 }
 
 /// Resolve the command and configured arguments for a tool.
-pub fn resolve_tool_command(config: &[(String, String)], tool: &str) -> Result<(String, Vec<String>)> {
+pub fn resolve_tool_command(
+    config: &[(String, String)],
+    tool: &str,
+) -> Result<(String, Vec<String>)> {
     let command_line = resolve_tool(config, tool);
     parse_command_line(&command_line)
 }
@@ -334,7 +328,11 @@ fn find_files_by_name(root: &Path, patterns: &[&str]) -> Result<Vec<String>> {
     // Deduplicate name patterns
     let unique: Vec<&str> = {
         let mut seen = HashSet::new();
-        patterns.iter().filter(|p| seen.insert(**p)).copied().collect()
+        patterns
+            .iter()
+            .filter(|p| seen.insert(**p))
+            .copied()
+            .collect()
     };
 
     // Try fd first: single traversal with combined regex
@@ -375,7 +373,8 @@ fn find_with_fd(root: &Path, patterns: &[&str]) -> Result<Vec<String>> {
 
 fn find_with_find(root: &Path, patterns: &[&str]) -> Result<Vec<String>> {
     let mut cmd = std::process::Command::new("find");
-    cmd.arg(".").args(["-not", "-path", "*/.git/*", "-type", "f"]);
+    cmd.arg(".")
+        .args(["-not", "-path", "*/.git/*", "-type", "f"]);
 
     // Build: \( -name 'pat1' -o -name 'pat2' \)
     cmd.arg("(");
@@ -462,22 +461,57 @@ pub fn copy_recursive(src: &Path, dst: &Path, excludes: &[PathBuf]) -> Result<()
         return Ok(());
     }
     if src.is_dir() {
-        fs::create_dir_all(dst)
-            .with_context(|| format!("failed to create dir: {}", dst.display()))?;
-        for entry in fs::read_dir(src)
-            .with_context(|| format!("failed to read dir: {}", src.display()))?
-        {
-            let entry = entry?;
-            let entry_dst = dst.join(entry.file_name());
-            copy_recursive(&entry.path(), &entry_dst, excludes)?;
-        }
+        copy_directory(src, dst, excludes)?;
     } else {
         if let Some(parent) = dst.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::copy(src, dst)
-            .with_context(|| format!("failed to copy {} -> {}", src.display(), dst.display()))?;
+        copy_file(src, dst)?;
     }
+    Ok(())
+}
+
+pub fn copy_recursive_parallel(src: &Path, dst: &Path, excludes: &[PathBuf]) -> Result<()> {
+    if excludes.iter().any(|ex| src.starts_with(ex)) || !src.is_dir() {
+        return copy_recursive(src, dst, excludes);
+    }
+    fs::create_dir_all(dst).with_context(|| format!("failed to create dir: {}", dst.display()))?;
+    let entries: Vec<_> = fs::read_dir(src)
+        .with_context(|| format!("failed to read dir: {}", src.display()))?
+        .collect::<std::io::Result<_>>()?;
+    // Splitting only the top directory keeps nested trees within the worker limit.
+    crate::parallel::map(&entries, |entry| copy_directory_entry(entry, dst, excludes))
+        .into_iter()
+        .collect()
+}
+
+fn copy_directory(src: &Path, dst: &Path, excludes: &[PathBuf]) -> Result<()> {
+    fs::create_dir_all(dst).with_context(|| format!("failed to create dir: {}", dst.display()))?;
+    for entry in
+        fs::read_dir(src).with_context(|| format!("failed to read dir: {}", src.display()))?
+    {
+        copy_directory_entry(&entry?, dst, excludes)?;
+    }
+    Ok(())
+}
+
+fn copy_directory_entry(entry: &fs::DirEntry, dst: &Path, excludes: &[PathBuf]) -> Result<()> {
+    let source = entry.path();
+    if excludes.iter().any(|ex| source.starts_with(ex)) {
+        return Ok(());
+    }
+    let target = dst.join(entry.file_name());
+    let file_type = entry.file_type()?;
+    if file_type.is_dir() || (file_type.is_symlink() && source.is_dir()) {
+        copy_directory(&source, &target, excludes)
+    } else {
+        copy_file(&source, &target)
+    }
+}
+
+fn copy_file(src: &Path, dst: &Path) -> Result<()> {
+    fs::copy(src, dst)
+        .with_context(|| format!("failed to copy {} -> {}", src.display(), dst.display()))?;
     Ok(())
 }
 
@@ -485,6 +519,44 @@ pub fn copy_recursive(src: &Path, dst: &Path, excludes: &[PathBuf]) -> Result<()
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn parallel_directory_copy_preserves_contents_links_and_exclusions() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("source");
+        let dst = tmp.path().join("destination");
+        for index in 0..16 {
+            let dir = src.join(index.to_string());
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("keep"), index.to_string()).unwrap();
+            fs::write(dir.join("skip"), "excluded").unwrap();
+        }
+        std::os::unix::fs::symlink(src.join("0/keep"), src.join("file-link")).unwrap();
+        std::os::unix::fs::symlink(src.join("0"), src.join("dir-link")).unwrap();
+        let mut excludes: Vec<_> = (0..16)
+            .map(|index| src.join(format!("{index}/skip")))
+            .collect();
+        excludes.push(src.join("dir-link/skip"));
+        copy_recursive_parallel(&src, &dst, &excludes).unwrap();
+        for index in 0..16 {
+            assert_eq!(
+                fs::read_to_string(dst.join(format!("{index}/keep"))).unwrap(),
+                index.to_string()
+            );
+            assert!(!dst.join(format!("{index}/skip")).exists());
+        }
+        assert_eq!(fs::read_to_string(dst.join("file-link")).unwrap(), "0");
+        assert_eq!(fs::read_to_string(dst.join("dir-link/keep")).unwrap(), "0");
+        assert!(!dst.join("dir-link/skip").exists());
+        assert!(!dst.join("file-link").is_symlink());
+        assert!(!dst.join("dir-link").is_symlink());
+
+        let excluded = tmp.path().join("excluded");
+        copy_recursive_parallel(&src, &excluded, std::slice::from_ref(&src)).unwrap();
+        assert!(!excluded.exists());
+        std::os::unix::fs::symlink(src.join("missing"), src.join("broken-link")).unwrap();
+        assert!(copy_recursive_parallel(&src, &dst, &[]).is_err());
+    }
 
     #[test]
     fn extract_git_detail_strips_fatal_prefix() {
@@ -578,15 +650,16 @@ mod tests {
             ("waku.copy.include".to_string(), ".env".to_string()),
             ("waku.link.include".to_string(), ".direnv".to_string()),
         ];
-        assert_eq!(config_values(&config, "waku.link.include"), vec!["node_modules", ".direnv"]);
+        assert_eq!(
+            config_values(&config, "waku.link.include"),
+            vec!["node_modules", ".direnv"]
+        );
         assert_eq!(config_values(&config, "waku.copy.include"), vec![".env"]);
     }
 
     #[test]
     fn config_values_returns_empty_for_missing_key() {
-        let config = vec![
-            ("waku.link.include".to_string(), "node_modules".to_string()),
-        ];
+        let config = vec![("waku.link.include".to_string(), "node_modules".to_string())];
         let result: Vec<&str> = config_values(&config, "waku.copy.include");
         assert!(result.is_empty());
     }
@@ -630,7 +703,10 @@ mod tests {
         copy_recursive(&src, &dst, &excludes).unwrap();
 
         assert!(dst.join("a.txt").exists(), "a.txt should be copied");
-        assert!(dst.join("keep/ok.txt").exists(), "keep/ok.txt should be copied");
+        assert!(
+            dst.join("keep/ok.txt").exists(),
+            "keep/ok.txt should be copied"
+        );
         assert!(!dst.join("cache").exists(), "cache dir should be excluded");
     }
 
@@ -648,7 +724,10 @@ mod tests {
         copy_recursive(&src, &dst, &excludes).unwrap();
 
         assert!(dst.join("keep.txt").exists(), "keep.txt should be copied");
-        assert!(!dst.join("secret.txt").exists(), "secret.txt should be excluded");
+        assert!(
+            !dst.join("secret.txt").exists(),
+            "secret.txt should be excluded"
+        );
     }
 
     #[test]
@@ -667,7 +746,10 @@ mod tests {
         copy_recursive(&src, &dst, &excludes).unwrap();
 
         assert!(!dst.join(".cache").exists(), ".cache should be excluded");
-        assert!(dst.join(".cache-v2/y").exists(), ".cache-v2 should NOT be excluded");
+        assert!(
+            dst.join(".cache-v2/y").exists(),
+            ".cache-v2 should NOT be excluded"
+        );
     }
 
     #[test]
@@ -688,9 +770,57 @@ mod tests {
     }
 
     #[test]
+    fn copy_recursive_follows_file_and_directory_symlinks() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("source");
+        let dst = tmp.path().join("destination");
+        fs::create_dir_all(src.join("nested")).unwrap();
+        fs::write(src.join("nested/file.txt"), "contents").unwrap();
+        std::os::unix::fs::symlink("nested/file.txt", src.join("file-link")).unwrap();
+        std::os::unix::fs::symlink("nested", src.join("directory-link")).unwrap();
+
+        copy_recursive(&src, &dst, &[]).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(dst.join("file-link")).unwrap(),
+            "contents"
+        );
+        assert_eq!(
+            fs::read_to_string(dst.join("directory-link/file.txt")).unwrap(),
+            "contents"
+        );
+        assert!(!dst.join("file-link").is_symlink());
+        assert!(!dst.join("directory-link").is_symlink());
+    }
+
+    #[test]
+    fn copy_recursive_creates_parent_for_a_single_file_and_preserves_other_files() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("source.txt");
+        let dst = tmp.path().join("nested/destination.txt");
+        fs::write(&src, "contents").unwrap();
+        copy_recursive(&src, &dst, &[]).unwrap();
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "contents");
+
+        let source_dir = tmp.path().join("source-dir");
+        fs::create_dir(&source_dir).unwrap();
+        fs::write(source_dir.join("another.txt"), "another").unwrap();
+        copy_recursive(&source_dir, dst.parent().unwrap(), &[]).unwrap();
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "contents");
+        assert_eq!(
+            fs::read_to_string(dst.parent().unwrap().join("another.txt")).unwrap(),
+            "another"
+        );
+    }
+
+    #[test]
     fn spinner_template_has_dots_after_message() {
-        let msg_pos = SPINNER_TEMPLATE.find("{msg").expect("{msg} should exist in template");
-        let spinner_pos = SPINNER_TEMPLATE.find("{spinner").expect("{spinner} should exist in template");
+        let msg_pos = SPINNER_TEMPLATE
+            .find("{msg")
+            .expect("{msg} should exist in template");
+        let spinner_pos = SPINNER_TEMPLATE
+            .find("{spinner")
+            .expect("{spinner} should exist in template");
         assert!(
             spinner_pos > msg_pos,
             "{{spinner}} (dots) must appear after {{msg}} in template: {SPINNER_TEMPLATE}"

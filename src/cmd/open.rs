@@ -29,13 +29,14 @@ pub fn run(
         None => std::env::current_dir()?,
         Some(b) => match worktree::resolve_worktree_with_config(&root, b, &waku_config) {
             Ok(dir) => dir,
-            Err(_) => create::run(
+            Err(_) => create::run_with_config(
                 b,
                 CreateOptions {
                     quiet: true,
-                    root: Some(root.clone()),
                     ..Default::default()
                 },
+                &root,
+                &waku_config,
             )?,
         },
     };

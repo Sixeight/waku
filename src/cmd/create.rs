@@ -1,13 +1,13 @@
+use anyhow::{Context, Result};
+use console::style;
 use std::fs;
 use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use anyhow::{Context, Result};
-use console::style;
 
 use super::{
-    collect_worktreeinclude_files, config_bool, copy_recursive, remove_existing, spinner,
-    WorktreeIncludeMode,
+    collect_worktreeinclude_files, config_bool, copy_recursive, copy_recursive_parallel,
+    remove_existing, spinner, WorktreeIncludeMode,
 };
 use crate::{git, worktree};
 
@@ -32,10 +32,19 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
         None => worktree::repo_root()?,
     };
     let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
-    let wt_path = worktree::worktree_path_with_config(&root, branch, &waku_config)?;
-    let fetch = opts.fetch || config_bool(&waku_config, "waku.create.fetch");
+    run_with_config(branch, opts, &root, &waku_config)
+}
+
+pub(super) fn run_with_config(
+    branch: &str,
+    opts: CreateOptions,
+    root: &Path,
+    waku_config: &[(String, String)],
+) -> Result<PathBuf> {
+    let wt_path = worktree::worktree_path_with_config(root, branch, waku_config)?;
+    let fetch = opts.fetch || config_bool(waku_config, "waku.create.fetch");
     let from_default_branch = opts.from_default_branch
-        || (opts.from.is_none() && config_bool(&waku_config, "waku.create.from-default-branch"));
+        || (opts.from.is_none() && config_bool(waku_config, "waku.create.from-default-branch"));
 
     if fetch {
         let sp = if opts.quiet {
@@ -43,7 +52,7 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
         } else {
             Some(spinner("Fetching origin".to_string()))
         };
-        git::git_output_in(&root, &["fetch", "--prune", "origin"])?;
+        git::git_output_in(root, &["fetch", "--prune", "origin"])?;
         if let Some(sp) = sp {
             sp.finish_and_clear();
         }
@@ -52,18 +61,16 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
         }
     }
 
-    // Collect worktreeinclude files in parallel with worktree creation
-    // since both only depend on root, not on wt_path.
-    let wti_mode = WorktreeIncludeMode::from_config(&waku_config);
+    let wti_mode = WorktreeIncludeMode::from_config(waku_config);
     let (wt_result, wti_files) = std::thread::scope(|s| {
         let wti_handle = s.spawn(|| {
             if wti_mode == WorktreeIncludeMode::Ignore {
                 return Ok(vec![]);
             }
-            collect_worktreeinclude_files(&root)
+            collect_worktreeinclude_files(root)
         });
         let wt_result = create_worktree(
-            &root,
+            root,
             &wt_path,
             branch,
             opts.from.as_deref(),
@@ -85,16 +92,16 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     });
     wt_result?;
 
-    create_symlinks(&root, &wt_path, &waku_config, opts.quiet)?;
+    create_symlinks(root, &wt_path, waku_config, opts.quiet)?;
     if !opts.copy_from_base {
-        create_copies(&root, &wt_path, &waku_config, opts.quiet)?;
+        create_copies(root, &wt_path, waku_config, opts.quiet)?;
     }
-    apply_worktreeinclude(&root, &wt_path, wti_mode, wti_files?, opts.quiet)?;
-    run_post_create_hooks(&wt_path, &waku_config, opts.quiet)?;
+    apply_worktreeinclude(root, &wt_path, wti_mode, wti_files?, opts.quiet)?;
+    run_post_create_hooks(&wt_path, waku_config, opts.quiet)?;
 
     if opts.agent {
         let (cmd, args) = super::resolve_tool_command_with_override(
-            &waku_config,
+            waku_config,
             "agent",
             opts.agent_command.as_deref(),
         )?;
@@ -102,7 +109,7 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
         git::exec_command(&cmd, &args, &wt_path)?;
     } else if opts.editor {
         let (cmd, args) = super::resolve_tool_command_with_override(
-            &waku_config,
+            waku_config,
             "editor",
             opts.editor_command.as_deref(),
         )?;
@@ -148,7 +155,8 @@ fn create_worktree(
         Some(spinner(format!("Creating worktree {branch}")))
     };
     let wt_path_str = wt_path.to_string_lossy();
-    if git::branch_exists(root, branch) {
+    let (local_exists, remote_exists) = git::branch_refs_exist(root, branch)?;
+    if local_exists {
         if from.is_some() && !quiet {
             eprintln!(
                 "  {} Branch {} already exists, --from is ignored",
@@ -170,19 +178,15 @@ fn create_worktree(
         } else if from_default_branch {
             git::remote_default_branch_ref(root)
                 .context("could not resolve origin/HEAD; run git fetch origin or pass --from")?
-        } else if git::remote_branch_exists(root, branch) {
+        } else if remote_exists {
             format!("origin/{branch}")
         } else {
             "HEAD".to_string()
         };
-        git::git_output_in(root, &[
-            "worktree",
-            "add",
-            "-b",
-            branch,
-            &wt_path_str,
-            &base_ref,
-        ])?;
+        git::git_output_in(
+            root,
+            &["worktree", "add", "-b", branch, &wt_path_str, &base_ref],
+        )?;
     }
     if let Some(sp) = sp {
         sp.finish_and_clear();
@@ -277,7 +281,10 @@ fn apply_worktreeinclude(
 
     match mode {
         WorktreeIncludeMode::Copy => {
-            let names: Vec<&str> = files.iter().map(|p| p.to_str().unwrap_or_default()).collect();
+            let names: Vec<&str> = files
+                .iter()
+                .map(|p| p.to_str().unwrap_or_default())
+                .collect();
             // waku.copy.exclude applies only to waku.copy.include, not .worktreeinclude
             copy_entries_parallel(root, wt_path, &names, &[], quiet);
         }
@@ -296,11 +303,7 @@ fn apply_worktreeinclude(
     Ok(())
 }
 
-fn run_post_create_hooks(
-    wt_path: &Path,
-    config: &[(String, String)],
-    quiet: bool,
-) -> Result<()> {
+fn run_post_create_hooks(wt_path: &Path, config: &[(String, String)], quiet: bool) -> Result<()> {
     let hooks = super::config_values(config, "waku.hook.postcreate");
 
     for hook in hooks {
@@ -365,20 +368,17 @@ fn copy_entries_parallel(
         Some(spinner(format!("Copying {label}")))
     };
 
-    let results: Vec<(&str, Result<()>)> = std::thread::scope(|s| {
-        let handles: Vec<_> = names
-            .iter()
-            .map(|name| {
-                let source = root.join(name);
-                let target = wt_path.join(name);
-                s.spawn(move || {
-                    let result = remove_existing(&target)
-                        .and_then(|_| copy_recursive(&source, &target, excludes));
-                    (*name, result)
-                })
-            })
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    let results = crate::parallel::map(names, |name| {
+        let source = root.join(name);
+        let target = wt_path.join(name);
+        let result = remove_existing(&target).and_then(|_| {
+            if names.len() == 1 {
+                copy_recursive_parallel(&source, &target, excludes)
+            } else {
+                copy_recursive(&source, &target, excludes)
+            }
+        });
+        (*name, result)
     });
 
     if let Some(sp) = sp {

@@ -188,6 +188,20 @@ git config --add waku.hook.postCreate "cp .env.example .env"
 git config --add waku.hook.postCreate "direnv allow"
 ```
 
+## Performance measurements
+
+[`scripts/benchmark.py`](scripts/benchmark.py) compares two release binaries using
+temporary Git repositories and a local bare remote. It checks worktree contents
+and command results alongside timings. See [the measurement notes](docs/performance.md)
+for the scenarios and results.
+
+```sh
+python3 scripts/benchmark.py \
+  --binary baseline=/tmp/git-waku-baseline \
+  --binary candidate=target/release/git-waku \
+  --output /tmp/waku-benchmark.json
+```
+
 ## Acknowledgements
 
 Inspired by [git-worktree-runner](https://github.com/coderabbitai/git-worktree-runner).
