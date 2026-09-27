@@ -361,9 +361,11 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         chosen
     };
 
-    // `git worktree remove` takes the repository lock, so surfacing per-worktree
-    // progress is more useful than spawning concurrent removals here.
+    // `git worktree remove` takes the repository lock, so keep removals
+    // sequential. Branch deletion is batched separately to avoid one Git
+    // process per worktree.
     let total = selected.len();
+    let mut removed_worktrees = Vec::new();
     for (index, (path, branch)) in selected.into_iter().enumerate() {
         let name = display_name(&path, branch.as_deref());
         let progress = format!("{name} ({}/{total})", index + 1);
@@ -372,14 +374,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         sp.finish_and_clear();
 
         match result {
-            Ok(_) => {
-                if let Some(ref b) = branch {
-                    if let Err(e) = git::git_output_in(&root, &["branch", "-D", b]) {
-                        print_warning(&format!("failed to delete branch '{b}'"), &e);
-                    }
-                }
-                eprintln!("  {} Removed {}", style("✔").green(), progress);
-            }
+            Ok(_) => removed_worktrees.push((progress, branch)),
             Err(e) => {
                 eprintln!(
                     "  {} Failed to remove {}",
@@ -392,6 +387,38 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         }
     }
 
+    let branches_to_delete: Vec<String> = removed_worktrees
+        .iter()
+        .filter_map(|(_, branch)| branch.as_ref().cloned())
+        .collect();
+    let branch_failures = if branches_to_delete.is_empty() {
+        HashMap::new()
+    } else {
+        let sp = spinner(format!("Deleting {} branches", branches_to_delete.len()));
+        let failures = delete_branches(&root, &branches_to_delete, ref_oids.as_ref());
+        sp.finish_and_clear();
+        failures
+    };
+
+    for (progress, branch) in removed_worktrees {
+        if let Some(branch) = branch {
+            if let Some(failure) = branch_failures.get(&branch) {
+                let (message, error) = match failure {
+                    BranchDeleteFailure::Failed(error) => (
+                        format!("failed to delete branch '{branch}'"),
+                        error.as_str(),
+                    ),
+                    BranchDeleteFailure::Unverified(error) => (
+                        format!("could not verify deletion of branch '{branch}'"),
+                        error.as_str(),
+                    ),
+                };
+                print_warning(&message, &anyhow::anyhow!("{error}"));
+            }
+        }
+        eprintln!("  {} Removed {}", style("✔").green(), progress);
+    }
+
     // Clean up empty directories in worktrees base
     let base = worktree::worktrees_base_with_config(&root, &waku_config)?;
     if base.exists() {
@@ -399,6 +426,87 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+enum BranchDeleteFailure {
+    Failed(String),
+    Unverified(String),
+}
+
+fn delete_branches(
+    root: &std::path::Path,
+    branches: &[String],
+    initial_refs: Option<&HashMap<String, String>>,
+) -> HashMap<String, BranchDeleteFailure> {
+    const BATCH_SIZE: usize = 128;
+
+    let fallback_initial_refs = if initial_refs.is_none() {
+        git::ref_oids(root).ok()
+    } else {
+        None
+    };
+    let initial_refs = initial_refs.or(fallback_initial_refs.as_ref());
+    let mut failures = HashMap::new();
+    let mut pending = Vec::new();
+    for branch in branches {
+        let ref_name = format!("refs/heads/{branch}");
+        if initial_refs.is_some_and(|refs| !refs.contains_key(&ref_name)) {
+            if let Err(error) = git::git_output_in(root, &["branch", "-D", "--", branch]) {
+                failures.insert(
+                    branch.clone(),
+                    BranchDeleteFailure::Failed(format!("{error:#}")),
+                );
+            }
+        } else {
+            pending.push(branch.clone());
+        }
+    }
+
+    for batch in pending.chunks(BATCH_SIZE) {
+        let mut args = vec!["branch", "-D", "--"];
+        args.extend(batch.iter().map(String::as_str));
+        let Err(batch_error) = git::git_output_in(root, &args) else {
+            continue;
+        };
+
+        match git::ref_oids(root) {
+            Ok(current_refs) => {
+                for branch in batch {
+                    if !current_refs.contains_key(&format!("refs/heads/{branch}")) {
+                        if initial_refs.is_none() {
+                            failures.insert(
+                                branch.clone(),
+                                BranchDeleteFailure::Unverified(format!(
+                                    "batch deletion failed ({batch_error:#}); could not determine whether the branch existed beforehand"
+                                )),
+                            );
+                        }
+                        continue;
+                    }
+                    if let Err(error) = git::git_output_in(root, &["branch", "-D", "--", branch]) {
+                        failures.insert(
+                            branch.clone(),
+                            BranchDeleteFailure::Failed(format!(
+                                "batch deletion failed ({batch_error:#}); retry failed ({error:#})"
+                            )),
+                        );
+                    }
+                }
+            }
+            Err(ref_error) => {
+                for branch in batch {
+                    failures.insert(
+                        branch.clone(),
+                        BranchDeleteFailure::Unverified(format!(
+                            "batch deletion failed ({batch_error:#}); could not inspect refs ({ref_error:#})"
+                        )),
+                    );
+                }
+            }
+        }
+    }
+
+    failures
 }
 
 fn select_worktrees(
