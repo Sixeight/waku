@@ -1512,6 +1512,230 @@ fn create_copies_worktreeinclude_files_by_default() {
 }
 
 #[test]
+fn create_worktreeinclude_excludes_agent_worktrees_and_globs() {
+    let (_tmp, repo) = setup_repo();
+    fs::write(
+        repo.join(".gitignore"),
+        "**/.env\n**/.env.local\n.claude/\nbin/\n",
+    )
+    .unwrap();
+    run_git(&repo, &["add", ".gitignore"]);
+    run_git(&repo, &["commit", "-m", "add gitignore"]);
+    fs::write(
+        repo.join(".worktreeinclude"),
+        "**/.env\n**/.env.local\nbin/**/tool\n!.claude/worktrees/**\n!**/cache/**\n",
+    )
+    .unwrap();
+    for path in [
+        ".env",
+        "web/app/.env.local",
+        ".claude/worktrees/agent-one/.env",
+        ".claude/worktrees/agent-two/web/app/.env.local",
+        "bin/tool",
+        "bin/cache/tool",
+        "bin/cache-other/tool",
+    ] {
+        let target = repo.join(path);
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(target, "fixture").unwrap();
+    }
+    let output = run_waku(&repo, &["create", "feature-wti-exclude"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let wt = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-wti-exclude");
+    for path in [
+        ".env",
+        "web/app/.env.local",
+        "bin/tool",
+        "bin/cache-other/tool",
+    ] {
+        assert!(wt.join(path).exists(), "missing {path}");
+    }
+    for path in [".claude/worktrees", "bin/cache"] {
+        assert!(!wt.join(path).exists(), "excluded path copied: {path}");
+    }
+}
+
+#[test]
+fn create_worktreeinclude_exclusions_apply_in_copy_and_link_modes() {
+    for mode in ["copy", "link"] {
+        let (_tmp, repo) = setup_repo();
+        fs::write(repo.join(".gitignore"), "**/.env\n.claude/\n").unwrap();
+        run_git(&repo, &["add", ".gitignore"]);
+        run_git(&repo, &["commit", "-m", "add gitignore"]);
+        run_git(&repo, &["config", "waku.worktreeinclude", mode]);
+        fs::write(
+            repo.join(".worktreeinclude"),
+            "**/.env\n!.claude/worktrees/**\n",
+        )
+        .unwrap();
+        for path in ["web/.env", ".claude/worktrees/agent/.env"] {
+            let target = repo.join(path);
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::write(target, "fixture").unwrap();
+        }
+        let output = run_waku(&repo, &["create", "feature-exclude-mode"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let wt = repo
+            .parent()
+            .unwrap()
+            .join("myrepo-worktrees/feature-exclude-mode");
+        assert!(wt.join("web/.env").exists());
+        assert_eq!(
+            wt.join("web").is_symlink() || wt.join("web/.env").is_symlink(),
+            mode == "link",
+        );
+        assert!(!wt.join(".claude/worktrees").exists());
+        fs::write(repo.join(".worktreeinclude"), "web/.env\n!web/.env\n").unwrap();
+        let output = run_waku(&repo, &["create", "feature-exclude-all"]);
+        assert!(output.status.success());
+        let wt = repo
+            .parent()
+            .unwrap()
+            .join("myrepo-worktrees/feature-exclude-all");
+        assert!(!wt.join("web/.env").exists());
+    }
+}
+
+#[test]
+fn create_worktreeinclude_uses_gitignore_pattern_semantics() {
+    for mode in ["copy", "link"] {
+        let (_tmp, repo) = setup_repo();
+        fs::write(repo.join(".gitignore"), "fixtures/\n").unwrap();
+        run_git(&repo, &["add", ".gitignore"]);
+        run_git(&repo, &["commit", "-m", "add gitignore"]);
+        run_git(&repo, &["config", "waku.worktreeinclude", mode]);
+        fs::write(
+            repo.join(".worktreeinclude"),
+            concat!(
+                "# ignored comment\n",
+                "fixtures/**/*.txt\n",
+                "!fixtures/**/*.txt\n",
+                "fixtures/reincluded.txt\n",
+                "/fixtures/root.txt\n",
+                "single.txt\n",
+                "!fixtures/excluded/\n",
+                "fixtures/excluded/child.txt\n",
+                "!fixtures/cache/**\n",
+                "fixtures/cache/keep.txt\n",
+                "fixtures/[ab].txt\n",
+                "\\#literal\n",
+                "\\!literal\n",
+                "fixtures/space\\ \n",
+                "fixtures/line?break.txt\n",
+                "fixtures/directory/\n",
+            ),
+        )
+        .unwrap();
+        let included = [
+            "fixtures/reincluded.txt",
+            "fixtures/root.txt",
+            "fixtures/nested/single.txt",
+            "fixtures/cache/keep.txt",
+            "fixtures/a.txt",
+            "fixtures/b.txt",
+            "fixtures/#literal",
+            "fixtures/!literal",
+            "fixtures/space ",
+            "fixtures/line\nbreak.txt",
+            "fixtures/directory/child.txt",
+            "fixtures/excluded/child.txt",
+        ];
+        let excluded = [
+            "fixtures/other.txt",
+            "fixtures/nested/root.txt",
+            "fixtures/cache/drop.txt",
+            "fixtures/c.txt",
+        ];
+        for path in included.iter().chain(excluded.iter()) {
+            let target = repo.join(path);
+            fs::create_dir_all(target.parent().unwrap()).unwrap();
+            fs::write(target, "fixture").unwrap();
+        }
+        let output = run_waku(&repo, &["create", "feature-wti-semantics"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let wt = repo
+            .parent()
+            .unwrap()
+            .join("myrepo-worktrees/feature-wti-semantics");
+        for path in included {
+            assert!(wt.join(path).exists(), "{mode}: missing {path:?}");
+        }
+        for path in excluded {
+            assert!(!wt.join(path).exists(), "{mode}: copied excluded {path:?}");
+        }
+    }
+}
+
+#[test]
+fn create_worktreeinclude_preserves_tracked_files_in_selected_directories() {
+    for mode in ["copy", "link"] {
+        let (_tmp, repo) = setup_repo();
+        fs::create_dir_all(repo.join("config")).unwrap();
+        fs::write(repo.join("config/tracked.txt"), "committed").unwrap();
+        fs::write(repo.join(".gitignore"), "config/\n").unwrap();
+        run_git(&repo, &["add", ".gitignore"]);
+        run_git(&repo, &["add", "-f", "config/tracked.txt"]);
+        run_git(&repo, &["commit", "-m", "add configuration"]);
+        fs::write(repo.join("config/tracked.txt"), "local changes").unwrap();
+        fs::write(repo.join("config/secret.txt"), "fixture").unwrap();
+        fs::write(repo.join(".worktreeinclude"), "config/\n").unwrap();
+        run_git(&repo, &["config", "waku.worktreeinclude", mode]);
+        let output = run_waku(&repo, &["create", "feature-wti-tracked-directory"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let wt = repo
+            .parent()
+            .unwrap()
+            .join("myrepo-worktrees/feature-wti-tracked-directory");
+        assert_eq!(
+            fs::read_to_string(wt.join("config/tracked.txt")).unwrap(),
+            "committed"
+        );
+        assert!(wt.join("config/secret.txt").exists());
+    }
+}
+
+#[test]
+fn create_worktreeinclude_does_not_copy_nested_git_worktrees() {
+    let (_tmp, repo) = setup_repo();
+    fs::write(repo.join(".gitignore"), ".claude/\n").unwrap();
+    run_git(&repo, &["add", ".gitignore"]);
+    run_git(&repo, &["commit", "-m", "ignore agent worktrees"]);
+    run_git(
+        &repo,
+        &["worktree", "add", ".claude/worktrees/agent", "-b", "agent"],
+    );
+    fs::write(repo.join(".claude/local.env"), "fixture").unwrap();
+    fs::write(repo.join(".worktreeinclude"), ".claude/\n").unwrap();
+    let output = run_waku(&repo, &["create", "feature-nested-worktree"]);
+    assert!(output.status.success());
+    let wt = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-nested-worktree");
+    assert!(wt.join(".claude/local.env").exists());
+    assert!(!wt.join(".claude/worktrees").exists());
+}
+
+#[test]
 fn create_links_worktreeinclude_files_when_configured() {
     let (_tmp, repo) = setup_repo();
 

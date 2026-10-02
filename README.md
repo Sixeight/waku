@@ -157,13 +157,18 @@ This only applies to `waku.copy.include` entries. `.worktreeinclude` copies are 
 
 ### `.worktreeinclude`
 
-Place a `.worktreeinclude` file at the repository root to automatically include gitignored files in new worktrees. Uses the same pattern syntax as `.gitignore`, but only matches files that are actually gitignored.
+Place a `.worktreeinclude` file at the repository root to automatically include gitignored files in new worktrees. Patterns are evaluated by Git using `.gitignore` syntax, including `!` negation, root-anchored paths, directory patterns, and escaping. Only gitignored, untracked paths are selected. The last matching pattern wins, subject to [Git's parent-directory rules](https://git-scm.com/docs/gitignore#_pattern_format); `!` removes a path from the selection. Directories are copied or linked as a whole only when all their contents are selected; otherwise selected files are handled individually.
 
 ```
 # .worktreeinclude
-.env
+**/.env
 node_modules/
+!.claude/worktrees/**
 ```
+
+To exclude files matched by `**/.env` inside a directory, use
+`!.claude/worktrees/**`. Negating only the directory with
+`!.claude/worktrees/` does not cancel the `.env` file pattern.
 
 Set the mode with `waku.worktreeinclude`:
 

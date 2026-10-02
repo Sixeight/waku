@@ -220,217 +220,76 @@ impl WorktreeIncludeMode {
     }
 }
 
-fn is_glob_pattern(s: &str) -> bool {
-    s.contains('*') || s.contains('?') || s.contains('[')
-}
-
-/// Collect files matching `.worktreeinclude` patterns that are also gitignored.
+/// Collect paths matching `.worktreeinclude` that are also gitignored.
 /// Returns relative paths from `root`.
 pub fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>> {
-    let wti_path = root.join(".worktreeinclude");
-    if !wti_path.exists() {
-        return Ok(vec![]);
+    if !root.join(".worktreeinclude").exists() {
+        return Ok(Vec::new());
     }
 
-    let wti_content = fs::read_to_string(&wti_path)
-        .with_context(|| format!("failed to read {}", wti_path.display()))?;
+    // Combining exclude sources would select their union rather than their intersection.
+    let ignored_entries = git_ignored_paths(root, &["--exclude-standard"])?;
+    let (directories_without_files, ignored): (Vec<_>, Vec<_>) =
+        ignored_entries.into_iter().partition(|path| {
+            let source = root.join(path);
+            source.is_dir() && !source.is_symlink()
+        });
+    let included: HashSet<PathBuf> = git_ignored_paths(root, &["--exclude-from=.worktreeinclude"])?
+        .into_iter()
+        .collect();
+    let mut selected: HashSet<PathBuf> = ignored
+        .iter()
+        .filter(|path| included.contains(*path))
+        .cloned()
+        .collect();
 
-    let mut glob_patterns = Vec::new();
-    let mut literal_entries = Vec::new();
-
-    for raw in wti_content.lines() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
+    let directories = git_ignored_paths(
+        root,
+        &["--exclude-standard", "--directory", "--no-empty-directory"],
+    )?;
+    let mut result = Vec::new();
+    for directory in directories {
+        let source = root.join(&directory);
+        if !source.is_dir()
+            || source.is_symlink()
+            || directories_without_files
+                .iter()
+                .any(|path| path.starts_with(&directory))
+        {
             continue;
         }
-        let line = line.trim_end_matches('/');
-
-        if is_glob_pattern(line) {
-            glob_patterns.push(line.to_string());
-        } else if root.join(line).exists() {
-            literal_entries.push(line.to_string());
-        }
-    }
-
-    let mut seen = HashSet::new();
-    let mut candidates = Vec::new();
-
-    // Glob patterns: use fd/find for fast filename-based search,
-    // then verify matches client-side with glob::Pattern.
-    if !glob_patterns.is_empty() {
-        let compiled: Vec<glob::Pattern> = glob_patterns
+        let contents: Vec<_> = ignored
             .iter()
-            .filter_map(|p| glob::Pattern::new(p).ok())
+            .filter(|path| path.starts_with(&directory))
             .collect();
-
-        let name_patterns: Vec<&str> = glob_patterns
-            .iter()
-            .map(|p| extract_name_pattern(p))
-            .collect();
-
-        let found = find_files_by_name(root, &name_patterns)?;
-        for file in found {
-            if compiled.iter().any(|pat| pat.matches(&file)) && seen.insert(file.clone()) {
-                candidates.push(file);
+        // A directory link or recursive copy must not expose excluded contents.
+        if !contents.is_empty() && contents.iter().all(|path| selected.contains(*path)) {
+            for path in contents {
+                selected.remove(path);
             }
+            result.push(directory);
         }
     }
+    result.extend(selected);
+    result.sort();
+    Ok(result)
+}
 
-    // Literal entries: already verified to exist above.
-    for entry in literal_entries {
-        if seen.insert(entry.clone()) {
-            candidates.push(entry);
-        }
-    }
+fn git_ignored_paths(root: &Path, exclude_args: &[&str]) -> Result<Vec<PathBuf>> {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
 
-    // Filter all candidates through git check-ignore to keep only gitignored files.
-    if candidates.is_empty() {
-        return Ok(vec![]);
-    }
-    let ignored = git_check_ignore(root, &candidates)?;
-    Ok(candidates
-        .into_iter()
-        .filter(|c| ignored.contains(c.as_str()))
-        .map(PathBuf::from)
+    let mut args = vec!["ls-files", "--others", "--ignored", "-z"];
+    args.extend_from_slice(exclude_args);
+    let output = git::git_output_raw_in(root, &args)?;
+    Ok(output
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            let path = path.strip_suffix(b"/").unwrap_or(path);
+            PathBuf::from(OsString::from_vec(path.to_vec()))
+        })
         .collect())
-}
-
-/// Extract the filename part from a glob pattern for use with fd/find.
-/// e.g., `**/.env` → `.env`, `config/**/*.json` → `*.json`
-fn extract_name_pattern(pattern: &str) -> &str {
-    Path::new(pattern)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(pattern)
-}
-
-/// Convert a glob name pattern to a regex for fd.
-/// e.g., `.env` → `^\.env$`, `.env*.local` → `^\.env.*\.local$`
-fn glob_name_to_regex(name: &str) -> String {
-    let mut regex = String::from("^");
-    for c in name.chars() {
-        match c {
-            '*' => regex.push_str(".*"),
-            '?' => regex.push('.'),
-            '.' | '+' | '(' | ')' | '{' | '}' | '|' | '^' | '$' | '\\' => {
-                regex.push('\\');
-                regex.push(c);
-            }
-            _ => regex.push(c),
-        }
-    }
-    regex.push('$');
-    regex
-}
-
-/// Find files by name patterns using fd (fast, parallel) or find (fallback).
-fn find_files_by_name(root: &Path, patterns: &[&str]) -> Result<Vec<String>> {
-    // Deduplicate name patterns
-    let unique: Vec<&str> = {
-        let mut seen = HashSet::new();
-        patterns
-            .iter()
-            .filter(|p| seen.insert(**p))
-            .copied()
-            .collect()
-    };
-
-    // Try fd first: single traversal with combined regex
-    if let Ok(files) = find_with_fd(root, &unique) {
-        return Ok(files);
-    }
-
-    // Fall back to find
-    find_with_find(root, &unique)
-}
-
-fn stdout_lines(stdout: &[u8]) -> Vec<String> {
-    String::from_utf8_lossy(stdout)
-        .lines()
-        .map(|l| l.to_string())
-        .collect()
-}
-
-fn find_with_fd(root: &Path, patterns: &[&str]) -> Result<Vec<String>> {
-    let regex = patterns
-        .iter()
-        .map(|p| glob_name_to_regex(p))
-        .collect::<Vec<_>>()
-        .join("|");
-
-    let output = std::process::Command::new("fd")
-        .args(["--no-ignore", "--hidden", "--type", "f", "--regex", &regex])
-        .current_dir(root)
-        .output()
-        .context("fd not found")?;
-
-    if !output.status.success() {
-        anyhow::bail!("fd failed");
-    }
-
-    Ok(stdout_lines(&output.stdout))
-}
-
-fn find_with_find(root: &Path, patterns: &[&str]) -> Result<Vec<String>> {
-    let mut cmd = std::process::Command::new("find");
-    cmd.arg(".")
-        .args(["-not", "-path", "*/.git/*", "-type", "f"]);
-
-    // Build: \( -name 'pat1' -o -name 'pat2' \)
-    cmd.arg("(");
-    for (i, pat) in patterns.iter().enumerate() {
-        if i > 0 {
-            cmd.arg("-o");
-        }
-        cmd.args(["-name", pat]);
-    }
-    cmd.arg(")");
-
-    let output = cmd
-        .current_dir(root)
-        .output()
-        .context("failed to execute find")?;
-
-    Ok(stdout_lines(&output.stdout)
-        .into_iter()
-        .map(|l| l.strip_prefix("./").unwrap_or(&l).to_string())
-        .collect())
-}
-
-/// Run `git check-ignore` on a list of paths and return the ignored ones.
-fn git_check_ignore(root: &Path, paths: &[String]) -> Result<HashSet<String>> {
-    // For small lists, use positional args to avoid process stdin overhead.
-    if paths.len() <= 8 {
-        let output = std::process::Command::new("git")
-            .arg("check-ignore")
-            .args(paths)
-            .current_dir(root)
-            .output()
-            .context("failed to execute git check-ignore")?;
-        return Ok(stdout_lines(&output.stdout).into_iter().collect());
-    }
-
-    // For large lists, pipe via stdin in a separate thread to avoid deadlock.
-    use std::io::Write;
-    let mut child = std::process::Command::new("git")
-        .args(["check-ignore", "--stdin"])
-        .current_dir(root)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .context("failed to spawn git check-ignore")?;
-
-    let stdin = child.stdin.take().unwrap();
-    let paths_owned: Vec<String> = paths.to_vec();
-    std::thread::spawn(move || {
-        let mut stdin = stdin;
-        for path in &paths_owned {
-            let _ = writeln!(stdin, "{}", path);
-        }
-    });
-
-    let output = child.wait_with_output()?;
-    Ok(stdout_lines(&output.stdout).into_iter().collect())
 }
 
 /// Extract values for a given config key.
