@@ -22,11 +22,24 @@ Once installed, Git picks it up as `git waku`.
 git waku create my-feature
 git waku create my-feature --from origin/main   # branch from a specific ref
 git waku create my-feature --agent               # create and open with Claude Code
+git waku create my-feature --agent --no-fetch    # use cached refs and start without fetching
+git waku create my-feature --agent --fetch       # wait for origin before creating
 git waku create my-feature --editor             # create and open with Neovim
 git waku create my-feature --cd                 # create and start a shell in the worktree
 ```
 
 Worktrees are created in a sibling directory named `{repo}-worktrees/`. Slashes in branch names become dashes in directory names:
+
+`--no-fetch` overrides `waku.create.fetch` for this run and uses refs already
+cached locally. Newly pushed commits and branches are not available until a
+later fetch.
+
+When `waku.create.fetch` is enabled, `create --agent` starts from cached refs
+and fetches origin in the background. A newly created branch is fast-forwarded
+from its remote base when possible. The agent may see those files change while
+it is working; if the branch cannot fast-forward, Waku leaves it untouched and
+writes the fetch result to the worktree's Git directory. Pass `--fetch` to wait
+for the fetch before creating the worktree.
 
 ```
 myrepo/

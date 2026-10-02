@@ -3,7 +3,7 @@ use console::style;
 use std::fs;
 use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use super::{
     collect_worktreeinclude_files, config_bool, copy_recursive, copy_recursive_parallel,
@@ -19,6 +19,7 @@ pub struct CreateOptions {
     pub editor_command: Option<String>,
     pub cd: bool,
     pub fetch: bool,
+    pub no_fetch: bool,
     pub from: Option<String>,
     pub from_default_branch: bool,
     pub copy_from_base: bool,
@@ -42,11 +43,12 @@ pub(super) fn run_with_config(
     waku_config: &[(String, String)],
 ) -> Result<PathBuf> {
     let wt_path = worktree::worktree_path_with_config(root, branch, waku_config)?;
-    let fetch = opts.fetch || config_bool(waku_config, "waku.create.fetch");
+    let fetch = !opts.no_fetch && (opts.fetch || config_bool(waku_config, "waku.create.fetch"));
     let from_default_branch = opts.from_default_branch
         || (opts.from.is_none() && config_bool(waku_config, "waku.create.from-default-branch"));
+    let background_fetch = background_fetch_plan(root, branch, &opts, from_default_branch, fetch)?;
 
-    if fetch {
+    if fetch && background_fetch.is_none() {
         let sp = if opts.quiet {
             None
         } else {
@@ -90,7 +92,7 @@ pub(super) fn run_with_config(
 
         (wt_result, wti_files)
     });
-    wt_result?;
+    let created_from_ref = wt_result?;
 
     create_symlinks(root, &wt_path, waku_config, opts.quiet)?;
     if !opts.copy_from_base {
@@ -98,6 +100,18 @@ pub(super) fn run_with_config(
     }
     apply_worktreeinclude(root, &wt_path, wti_mode, wti_files?, opts.quiet)?;
     run_post_create_hooks(&wt_path, waku_config, opts.quiet)?;
+
+    if let Some(plan) = background_fetch {
+        let merge_ref = created_from_ref.as_ref().map(|_| plan.merge_ref.as_str());
+        let log_path = start_background_fetch(root, &wt_path, merge_ref)?;
+        if !opts.quiet {
+            eprintln!(
+                "  {} Fetching origin in background; fast-forwarding when possible (log: {})",
+                style("↻").cyan(),
+                log_path.display(),
+            );
+        }
+    }
 
     if opts.agent {
         let (cmd, args) = super::resolve_tool_command_with_override(
@@ -130,6 +144,117 @@ pub(super) fn run_with_config(
     Ok(wt_path)
 }
 
+struct BackgroundFetchPlan {
+    merge_ref: String,
+}
+
+fn background_fetch_plan(
+    root: &Path,
+    branch: &str,
+    opts: &CreateOptions,
+    from_default_branch: bool,
+    fetch: bool,
+) -> Result<Option<BackgroundFetchPlan>> {
+    if !fetch || !opts.agent || opts.fetch {
+        return Ok(None);
+    }
+
+    let merge_ref = if let Some(from_ref) = opts.from.as_deref() {
+        if !is_origin_tracking_ref(from_ref) || !ref_exists(root, from_ref) {
+            return Ok(None);
+        }
+        from_ref.to_string()
+    } else if from_default_branch {
+        let Ok(default_ref) = git::remote_default_branch_ref(root) else {
+            return Ok(None);
+        };
+        if !ref_exists(root, &default_ref) {
+            return Ok(None);
+        }
+        default_ref
+    } else {
+        format!("origin/{branch}")
+    };
+
+    Ok(Some(BackgroundFetchPlan { merge_ref }))
+}
+
+fn is_origin_tracking_ref(reference: &str) -> bool {
+    reference.starts_with("origin/") || reference.starts_with("refs/remotes/origin/")
+}
+
+fn ref_exists(root: &Path, reference: &str) -> bool {
+    git::git_output_in(root, &["rev-parse", "--verify", reference]).is_ok()
+}
+
+fn start_background_fetch(root: &Path, wt_path: &Path, merge_ref: Option<&str>) -> Result<PathBuf> {
+    let git_dir = PathBuf::from(git::git_output_in(wt_path, &["rev-parse", "--git-dir"])?);
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        wt_path.join(git_dir)
+    };
+    let log_path = git_dir.join("waku-background-fetch.log");
+    let stdout = fs::File::create(&log_path)
+        .with_context(|| format!("failed to create {}", log_path.display()))?;
+    let stderr = stdout.try_clone()?;
+
+    let executable = std::env::current_exe().context("failed to locate git-waku executable")?;
+    let mut command = Command::new(executable);
+    command.arg("__background-fetch").arg(root).arg(wt_path);
+    if let Some(merge_ref) = merge_ref {
+        command.arg(merge_ref);
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .spawn()
+        .context("failed to start background fetch")?;
+
+    Ok(log_path)
+}
+
+pub fn background_fetch(root: &Path, wt_path: &Path, merge_ref: Option<&str>) -> Result<()> {
+    git::git_output_in(root, &["fetch", "--prune", "origin"]).context("background fetch failed")?;
+
+    if let Some(merge_ref) = merge_ref {
+        if !ref_exists(root, merge_ref) {
+            println!("Fetched origin; {merge_ref} is not available for fast-forward.");
+            return Ok(());
+        }
+
+        if let Some(upstream) = origin_branch_ref(root, merge_ref) {
+            let upstream_arg = format!("--set-upstream-to={upstream}");
+            git::git_output_in(wt_path, &["branch", &upstream_arg])
+                .with_context(|| format!("failed to set upstream to {upstream}"))?;
+        }
+        let result = git::git_output_in(wt_path, &["merge", "--ff-only", merge_ref])
+            .with_context(|| format!("could not fast-forward from {merge_ref}"))?;
+        println!("Fetched origin; fast-forward result: {result}");
+    } else {
+        println!("Fetched origin; no new worktree branch was updated.");
+    }
+
+    Ok(())
+}
+
+fn origin_branch_ref(root: &Path, reference: &str) -> Option<String> {
+    let full_ref = if let Some(name) = reference.strip_prefix("origin/") {
+        format!("refs/remotes/origin/{name}")
+    } else if reference.starts_with("refs/remotes/origin/") {
+        reference.to_string()
+    } else {
+        return None;
+    };
+
+    git::git_output_in(root, &["check-ref-format", &full_ref])
+        .ok()
+        .filter(|_| ref_exists(root, &full_ref))
+        .map(|_| full_ref)
+}
+
 fn create_worktree(
     root: &Path,
     wt_path: &Path,
@@ -137,7 +262,7 @@ fn create_worktree(
     from: Option<&str>,
     from_default_branch: bool,
     quiet: bool,
-) -> Result<()> {
+) -> Result<Option<String>> {
     if wt_path.exists() {
         if !quiet {
             eprintln!(
@@ -146,7 +271,7 @@ fn create_worktree(
                 style(branch).bold(),
             );
         }
-        return Ok(());
+        return Ok(None);
     }
 
     let sp = if quiet {
@@ -172,6 +297,17 @@ fn create_worktree(
             );
         }
         git::git_output_in(root, &["worktree", "add", &wt_path_str, branch])?;
+        if let Some(sp) = sp {
+            sp.finish_and_clear();
+        }
+        if !quiet {
+            eprintln!(
+                "  {} Created worktree {}",
+                style("✔").green().bold(),
+                style(branch).bold(),
+            );
+        }
+        return Ok(None);
     } else {
         let base_ref = if let Some(from_ref) = from {
             from_ref.to_string()
@@ -187,18 +323,18 @@ fn create_worktree(
             root,
             &["worktree", "add", "-b", branch, &wt_path_str, &base_ref],
         )?;
+        if let Some(sp) = sp {
+            sp.finish_and_clear();
+        }
+        if !quiet {
+            eprintln!(
+                "  {} Created worktree {}",
+                style("✔").green().bold(),
+                style(branch).bold(),
+            );
+        }
+        return Ok(Some(base_ref));
     }
-    if let Some(sp) = sp {
-        sp.finish_and_clear();
-    }
-    if !quiet {
-        eprintln!(
-            "  {} Created worktree {}",
-            style("✔").green().bold(),
-            style(branch).bold(),
-        );
-    }
-    Ok(())
 }
 
 fn create_symlinks(

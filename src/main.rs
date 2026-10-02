@@ -1,6 +1,7 @@
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use git_waku::cmd;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "git-waku", about = "Git worktree runner")]
@@ -54,6 +55,10 @@ enum Command {
         /// Fetch origin before creating the worktree
         #[arg(long = "fetch")]
         fetch: bool,
+
+        /// Skip configured fetch and use the locally cached refs
+        #[arg(long = "no-fetch", conflicts_with = "fetch")]
+        no_fetch: bool,
 
         /// Create from origin's default branch
         #[arg(long = "from-default-branch", conflicts_with = "from")]
@@ -154,6 +159,12 @@ enum Command {
         /// Config value
         value: Option<String>,
     },
+    #[command(name = "__background-fetch", hide = true)]
+    BackgroundFetch {
+        root: PathBuf,
+        worktree: PathBuf,
+        merge_ref: Option<String>,
+    },
 }
 
 fn main() {
@@ -167,6 +178,7 @@ fn main() {
             cd,
             from,
             fetch,
+            no_fetch,
             from_default_branch,
             copy_from_base,
         }) => cmd::create::run(
@@ -179,6 +191,7 @@ fn main() {
                 cd,
                 from,
                 fetch,
+                no_fetch,
                 from_default_branch,
                 copy_from_base,
                 ..Default::default()
@@ -214,6 +227,11 @@ fn main() {
             key,
             value,
         }) => cmd::config::run(global, add, unset, &key, value.as_deref()),
+        Some(Command::BackgroundFetch {
+            root,
+            worktree,
+            merge_ref,
+        }) => cmd::create::background_fetch(&root, &worktree, merge_ref.as_deref()),
         None => cmd::passthrough(&cli.args),
     };
 
