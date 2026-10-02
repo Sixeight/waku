@@ -54,7 +54,7 @@ pub(super) fn run_with_config(
         } else {
             Some(spinner("Fetching origin".to_string()))
         };
-        git::git_output_in(root, &["fetch", "--prune", "origin"])?;
+        git::fetch_origin(root)?;
         if let Some(sp) = sp {
             sp.finish_and_clear();
         }
@@ -217,7 +217,7 @@ fn start_background_fetch(root: &Path, wt_path: &Path, merge_ref: Option<&str>) 
 }
 
 pub fn background_fetch(root: &Path, wt_path: &Path, merge_ref: Option<&str>) -> Result<()> {
-    git::git_output_in(root, &["fetch", "--prune", "origin"]).context("background fetch failed")?;
+    git::fetch_origin(root).context("background fetch failed")?;
 
     if let Some(merge_ref) = merge_ref {
         if !ref_exists(root, merge_ref) {

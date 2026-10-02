@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
@@ -35,6 +36,37 @@ pub fn git_output_raw_in(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
 /// Run a git command with a specific working directory and ignore stdout.
 pub fn git_in(dir: &Path, args: &[&str]) -> Result<()> {
     git_output_in(dir, args).map(|_| ())
+}
+
+pub fn fetch_origin(dir: &Path) -> Result<()> {
+    let args = ["fetch", "--prune", "origin"];
+    let mut retry_delays = [100, 200].into_iter();
+
+    loop {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("LC_ALL", "C")
+            .output()
+            .context("failed to execute: git fetch --prune origin")?;
+        if !output.status.success()
+            && is_fetch_ref_update_race(&String::from_utf8_lossy(&output.stderr))
+        {
+            if let Some(delay) = retry_delays.next() {
+                std::thread::sleep(Duration::from_millis(delay));
+                continue;
+            }
+        }
+        return parse_git_output(&output, &args).map(|_| ());
+    }
+}
+
+fn is_fetch_ref_update_race(stderr: &str) -> bool {
+    stderr.lines().any(|line| {
+        line.starts_with("error: cannot lock ref '")
+            && line.contains("': is at ")
+            && line.contains(" but expected ")
+    })
 }
 
 fn parse_git_output(output: &std::process::Output, args: &[&str]) -> Result<String> {
@@ -336,6 +368,23 @@ pub fn git_passthrough(args: &[String]) -> Result<i32> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn fetch_retries_only_ref_value_races() {
+        assert!(is_fetch_ref_update_race(
+            "From /tmp/origin\nerror: cannot lock ref 'refs/remotes/origin/main': is at abc but expected def\n"
+        ));
+        for stderr in [
+            "fatal: Authentication failed",
+            "fatal: unable to access remote: Could not resolve host",
+            "error: cannot lock ref 'refs/remotes/origin/main': Unable to create 'main.lock': File exists",
+            "error: cannot lock ref 'refs/remotes/origin/main': Permission denied",
+            "error: cannot lock ref 'refs/remotes/origin/topic/child': 'refs/remotes/origin/topic' exists; cannot create 'refs/remotes/origin/topic/child'",
+            "error: cannot lock ref 'refs/remotes/origin/main': is at abc\nunrelated but expected def",
+        ] {
+            assert!(!is_fetch_ref_update_race(stderr), "{stderr}");
+        }
+    }
 
     fn git(dir: &Path, args: &[&str]) -> String {
         git_output_in(dir, args).unwrap()
