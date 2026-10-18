@@ -281,6 +281,11 @@ fn create_worktree(
     };
     let wt_path_str = wt_path.to_string_lossy();
     let (local_exists, remote_exists) = git::branch_refs_exist(root, branch)?;
+    let mut add_args = Vec::new();
+    if git::git_output_in(root, &["config", "--get", "checkout.workers"]).is_err() {
+        add_args.extend_from_slice(&["-c", "checkout.workers=8"]);
+    }
+    add_args.extend_from_slice(&["worktree", "add"]);
     if local_exists {
         if from.is_some() && !quiet {
             eprintln!(
@@ -296,7 +301,8 @@ fn create_worktree(
                 style(branch).bold(),
             );
         }
-        git::git_output_in(root, &["worktree", "add", &wt_path_str, branch])?;
+        add_args.extend_from_slice(&[&wt_path_str, branch]);
+        git::git_output_in(root, &add_args)?;
         if let Some(sp) = sp {
             sp.finish_and_clear();
         }
@@ -319,10 +325,8 @@ fn create_worktree(
         } else {
             "HEAD".to_string()
         };
-        git::git_output_in(
-            root,
-            &["worktree", "add", "-b", branch, &wt_path_str, &base_ref],
-        )?;
+        add_args.extend_from_slice(&["-b", branch, &wt_path_str, &base_ref]);
+        git::git_output_in(root, &add_args)?;
         if let Some(sp) = sp {
             sp.finish_and_clear();
         }
