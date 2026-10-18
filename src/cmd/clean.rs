@@ -7,6 +7,7 @@ use super::{cleanup_empty_dirs, print_warning, spinner};
 use crate::{git, parallel, worktree};
 
 mod agents;
+mod details;
 mod safety;
 mod selector;
 
@@ -379,7 +380,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
             .cloned()
             .collect()
     } else {
-        let chosen = select_worktrees(&to_remove, &annotations)?;
+        let chosen = select_worktrees(&to_remove, &annotations, &check_refs)?;
         if chosen.is_empty() {
             println!("Aborted.");
             return Ok(());
@@ -549,6 +550,7 @@ fn delete_branches(
 fn select_worktrees(
     items: &[(String, Option<String>)],
     ann: &WorktreeAnnotations,
+    check_refs: &[String],
 ) -> Result<Vec<(String, Option<String>)>> {
     let term = Term::stderr();
     let count = items.len();
@@ -578,6 +580,23 @@ fn select_worktrees(
                         selected_count -= 1;
                     }
                 }
+                Key::Char(key @ ('d' | 'l' | 's')) if cursor < count => {
+                    let view = match key {
+                        'd' => details::View::Diff,
+                        'l' => details::View::Log,
+                        _ => details::View::Status,
+                    };
+                    term.clear_last_lines(display.line_count())?;
+                    details::show(
+                        &term,
+                        std::path::Path::new(&items[cursor].0),
+                        check_refs,
+                        view,
+                    )?;
+                    display = SelectorDisplay::new(&term, items, ann, cursor);
+                    display.draw(&term, &checked, cursor, selected_count)?;
+                    continue;
+                }
                 Key::Enter if cursor == count => {
                     term.clear_last_lines(display.line_count())?;
                     break Ok(items
@@ -591,6 +610,7 @@ fn select_worktrees(
                     term.clear_last_lines(display.line_count())?;
                     break Ok(vec![]);
                 }
+                Key::CtrlC => anyhow::bail!("cancelled; no selected deletions were applied"),
                 _ => continue,
             }
             display.update(

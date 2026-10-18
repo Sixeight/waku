@@ -93,6 +93,11 @@ The candidate table separates the information needed to decide whether each work
 
 `--force` allows dirty worktrees to be removed, but does not automatically select closed or detached worktrees that still have unique commits. Branches that have not diverged from main are reported as `unchanged`; fast-forward merged branches can fall into this category and remain unchecked. Use `git waku remove` or select them explicitly when appropriate.
 
+In the selector, press `d` for a diff against the primary worktree's branch
+(including uncommitted tracked changes), `l` for commits absent from that branch
+and its upstream, or `s` for status including untracked files. Scroll with the
+arrow keys or Page Up/Down; Enter, Esc, or `q` returns to the selection.
+
 `clean` protects worktrees used by running Claude Code, Codex, OpenCode,
 Gemini CLI, aider, or Grok CLI processes, including sessions waiting for input.
 Protected worktrees cannot be selected, even with `--force`. This is a

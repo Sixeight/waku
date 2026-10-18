@@ -85,7 +85,7 @@ impl SelectorDisplay {
         } else {
             format!("{}/{}", cursor + 1, self.rows.len())
         };
-        let summary = format!("{position} · {selected_count} selected");
+        let summary = format!("{position} · {selected_count} selected · d diff / l log / s status");
         let footer = if cursor == self.rows.len() {
             format!("  {} {}", style("▸").bold(), style(summary).bold())
         } else {
@@ -241,11 +241,11 @@ mod tests {
         assert_eq!(display.line_count(), 11);
         assert_eq!(
             strip_ansi_codes(&display.footer(2, 99)),
-            "    100/100 · 2 selected"
+            "    100/100 · 2 selected · d diff / l log / s status"
         );
         assert_eq!(
             strip_ansi_codes(&display.footer(2, 100)),
-            "  ▸ run · 2 selected"
+            "  ▸ run · 2 selected · d diff / l log / s status"
         );
 
         let compact = SelectorDisplay::build((3, 80), &items, &annotations, 100, 0);
