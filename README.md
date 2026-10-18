@@ -93,6 +93,11 @@ The candidate table separates the information needed to decide whether each work
 
 `--force` allows dirty worktrees to be removed, but does not automatically select closed or detached worktrees that still have unique commits. Branches that have not diverged from main are reported as `unchanged`; fast-forward merged branches can fall into this category and remain unchecked. Use `git waku remove` or select them explicitly when appropriate.
 
+Before each removal, `clean` verifies that the worktree's branch and HEAD have
+not changed since listing. A worktree listed as clean is also checked again
+for edits, unless `--force` is used. Dirty worktrees explicitly selected in
+the list can still be removed.
+
 ### Passthrough
 
 Any unrecognized subcommand is forwarded to `git worktree`:

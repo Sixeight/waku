@@ -6,6 +6,7 @@ use console::{measure_text_width, style, truncate_str, Key, Term};
 use super::{cleanup_empty_dirs, print_warning, spinner};
 use crate::{git, parallel, worktree};
 
+mod safety;
 mod selector;
 
 use selector::{SelectorDisplay, SelectorUpdate};
@@ -370,7 +371,17 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         let name = display_name(&path, branch.as_deref());
         let progress = format!("{name} ({}/{total})", index + 1);
         let sp = spinner(format!("Removing {progress}"));
-        let result = git::git_output_in(&root, &["worktree", "remove", "--force", &path]);
+        let expected = worktree_details.iter().find(|item| item.path == path);
+        let result = expected
+            .ok_or_else(|| anyhow::anyhow!("worktree snapshot unavailable"))
+            .and_then(|expected| {
+                safety::remove_worktree(
+                    &root,
+                    expected,
+                    &waku_config,
+                    force || dirty_set.contains(&path),
+                )
+            });
         sp.finish_and_clear();
 
         match result {
