@@ -226,6 +226,7 @@ mod tests {
             })
             .collect();
         let annotations = WorktreeAnnotations {
+            protected: &HashMap::new(),
             dirty: &HashSet::new(),
             unchanged: &HashSet::new(),
             gone: &HashSet::new(),

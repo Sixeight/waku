@@ -85,7 +85,7 @@ git waku clean --yes --force                # also remove dirty worktrees
 The candidate table separates the information needed to decide whether each worktree is safe to remove:
 
 - `REASON`: `merged`, `closed`, `detached`, or `unchanged`
-- `FILES`: `clean` or `dirty`
+- `FILES`: `clean`, `dirty`, `active agent`, or `agent check unavailable`
 - `COMMITS`: whether the branch is merged, or how many commits are unique to the worktree
 - `UPDATED` / `SUBJECT`: the latest commit (hidden on narrow terminals to preserve the safety columns)
 
@@ -93,10 +93,17 @@ The candidate table separates the information needed to decide whether each work
 
 `--force` allows dirty worktrees to be removed, but does not automatically select closed or detached worktrees that still have unique commits. Branches that have not diverged from main are reported as `unchanged`; fast-forward merged branches can fall into this category and remain unchecked. Use `git waku remove` or select them explicitly when appropriate.
 
-Before each removal, `clean` verifies that the worktree's branch and HEAD have
-not changed since listing. A worktree listed as clean is also checked again
-for edits, unless `--force` is used. Dirty worktrees explicitly selected in
-the list can still be removed.
+`clean` protects worktrees used by running Claude Code, Codex, OpenCode,
+Gemini CLI, aider, or Grok CLI processes, including sessions waiting for input.
+Protected worktrees cannot be selected, even with `--force`. This is a
+best-effort check of process working directories: remote sessions and desktop
+sessions whose processes run elsewhere may not be detected. If inspection
+fails, worktrees are kept and a warning is printed.
+
+Before each removal, `clean` checks for active agents again and verifies that
+the worktree's branch and HEAD have not changed since listing. A worktree
+listed as clean is also checked again for edits, unless `--force` is used.
+Dirty worktrees explicitly selected in the list can still be removed.
 
 ### Passthrough
 

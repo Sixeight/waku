@@ -6,6 +6,7 @@ use console::{measure_text_width, style, truncate_str, Key, Term};
 use super::{cleanup_empty_dirs, print_warning, spinner};
 use crate::{git, parallel, worktree};
 
+mod agents;
 mod safety;
 mod selector;
 
@@ -17,6 +18,7 @@ struct WorktreeAnnotations<'a> {
     gone: &'a HashSet<String>,
     commits: &'a HashMap<String, CommitInfo>,
     unique_commits: &'a HashMap<String, usize>,
+    protected: &'a HashMap<String, &'static str>,
     force: bool,
 }
 
@@ -312,12 +314,27 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         return Ok(());
     }
 
+    let agents = agents::ActiveAgents::inspect();
+    if let Err(error) = &agents {
+        print_warning("agent check unavailable; worktrees will be kept", error);
+    }
+    let protected: HashMap<_, _> = to_remove
+        .iter()
+        .filter_map(|(path, _)| match &agents {
+            Ok(agents) if agents.uses(std::path::Path::new(path)) => {
+                Some((path.clone(), "active agent"))
+            }
+            Err(_) => Some((path.clone(), "agent check unavailable")),
+            _ => None,
+        })
+        .collect();
     let annotations = WorktreeAnnotations {
         dirty: &dirty_set,
         unchanged: &unchanged_set,
         gone: &gone_set,
         commits: &commit_info,
         unique_commits: &unique_commits,
+        protected: &protected,
         force,
     };
 
@@ -339,6 +356,14 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
 
     let selected = if yes {
         for (path, branch) in &to_remove {
+            if let Some(reason) = protected.get(path) {
+                eprintln!(
+                    "  {} Skipped {} ({reason})",
+                    style("⚠").yellow(),
+                    display_name(path, branch.as_deref())
+                );
+                continue;
+            }
             if dirty_set.contains(path) && !force {
                 let name = display_name(path, branch.as_deref());
                 eprintln!("  {} Skipped {} (dirty)", style("⚠").yellow(), name,);
@@ -375,6 +400,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         let result = expected
             .ok_or_else(|| anyhow::anyhow!("worktree snapshot unavailable"))
             .and_then(|expected| {
+                agents::ActiveAgents::inspect()?.ensure_unused(std::path::Path::new(&path))?;
                 safety::remove_worktree(
                     &root,
                     expected,
@@ -542,7 +568,9 @@ fn select_worktrees(
             match term.read_key()? {
                 Key::ArrowUp | Key::Char('k') if cursor > 0 => cursor -= 1,
                 Key::ArrowDown | Key::Char('j') if cursor < count => cursor += 1,
-                Key::Char(' ') if cursor < count => {
+                Key::Char(' ')
+                    if cursor < count && !ann.protected.contains_key(&items[cursor].0) =>
+                {
                     checked[cursor] = !checked[cursor];
                     if checked[cursor] {
                         selected_count += 1;
@@ -595,7 +623,8 @@ fn display_name(path: &str, branch: Option<&str>) -> String {
 }
 
 fn initially_checked(path: &str, branch: Option<&str>, ann: &WorktreeAnnotations) -> bool {
-    (!ann.dirty.contains(path) || ann.force)
+    !ann.protected.contains_key(path)
+        && (!ann.dirty.contains(path) || ann.force)
         && !ann.unchanged.contains(path)
         && (worktree_reason(path, branch, ann) == "merged"
             || ann.unique_commits.get(path).copied() == Some(0))
@@ -623,6 +652,7 @@ fn table_layout(
         layout.reason = layout
             .reason
             .max(measure_text_width(worktree_reason(path, branch, ann)));
+        layout.files = layout.files.max(measure_text_width(file_status(path, ann)));
         layout.commits = layout
             .commits
             .max(measure_text_width(&commit_status(path, branch, ann)));
@@ -714,6 +744,16 @@ fn table_header(layout: &TableLayout) -> String {
     truncate_str(&header, layout.row_width, "…").into_owned()
 }
 
+fn file_status<'a>(path: &str, ann: &WorktreeAnnotations<'a>) -> &'a str {
+    ann.protected.get(path).copied().unwrap_or_else(|| {
+        if ann.dirty.contains(path) {
+            "dirty"
+        } else {
+            "clean"
+        }
+    })
+}
+
 fn worktree_row(
     path: &str,
     branch: Option<&str>,
@@ -735,11 +775,7 @@ fn worktree_row(
             .saturating_sub(measure_text_width(&visible_name)),
     );
     let reason = worktree_reason(path, branch, ann);
-    let files = if ann.dirty.contains(path) {
-        "dirty"
-    } else {
-        "clean"
-    };
+    let files = file_status(path, ann);
     let commits = commit_status(path, branch, ann);
     let (updated, subject) = ann
         .commits
@@ -812,6 +848,7 @@ mod tests {
         ]);
         let unique_commits = HashMap::from([(closed_path.to_string(), 2)]);
         let annotations = WorktreeAnnotations {
+            protected: &HashMap::new(),
             dirty: &dirty,
             unchanged: &unchanged,
             gone: &gone,
@@ -873,6 +910,7 @@ mod tests {
                 .map(|count| HashMap::from([(path.to_string(), count)]))
                 .unwrap_or_default();
             let annotations = WorktreeAnnotations {
+                protected: &HashMap::new(),
                 dirty: &dirty,
                 unchanged: &unchanged,
                 gone: &gone,
@@ -894,6 +932,7 @@ mod tests {
         let commits = HashMap::new();
         let unique_commits = HashMap::from([(path.to_string(), 0)]);
         let annotations = WorktreeAnnotations {
+            protected: &HashMap::new(),
             dirty: &dirty,
             unchanged: &unchanged,
             gone: &gone,

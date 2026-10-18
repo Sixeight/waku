@@ -89,6 +89,130 @@ fn run_waku(dir: &Path, args: &[&str]) -> std::process::Output {
 // --- Tests ---
 
 #[test]
+#[cfg(unix)]
+#[ignore = "requires permission to inspect real processes"]
+fn clean_keeps_worktrees_used_by_an_agent_even_with_force() {
+    use std::io::BufRead;
+
+    struct Agent(std::process::Child);
+    impl Drop for Agent {
+        fn drop(&mut self) {
+            self.0.kill().ok();
+            self.0.wait().ok();
+        }
+    }
+
+    let (tmp, repo) = setup_repo();
+    let worktree = repo.parent().unwrap().join("myrepo-worktrees/agent-work");
+    run_git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "agent-work",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    run_git(&worktree, &["commit", "--allow-empty", "-m", "work"]);
+    run_git(&repo, &["merge", "--no-ff", "agent-work"]);
+    let executable = tmp.path().join("Agent Tools/codex");
+    fs::create_dir(executable.parent().unwrap()).unwrap();
+    let source = tmp.path().join("agent.rs");
+    fs::write(&source, "fn main() { println!(\"ready\"); std::thread::sleep(std::time::Duration::from_secs(60)); }").unwrap();
+    let compiled = Command::new("rustc")
+        .arg(&source)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let mut agent = Agent(
+        Command::new(executable)
+            .current_dir(&worktree)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut ready = String::new();
+    std::io::BufReader::new(agent.0.stdout.take().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    assert_eq!(ready.trim(), "ready");
+    assert!(agent.0.try_wait().unwrap().is_none());
+
+    for args in [
+        vec!["clean", "--dry-run"],
+        vec!["clean", "--yes", "--force"],
+    ] {
+        let output = run_waku(&repo, &args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            worktree.exists(),
+            "an active agent's worktree must survive {args:?}"
+        );
+        assert!(Command::new("git")
+            .args(["show-ref", "--verify", "refs/heads/agent-work"])
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+            .status
+            .success());
+        let report = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(report.contains("active agent"), "{report}");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn clean_keeps_worktrees_when_agent_inspection_is_unavailable() {
+    use std::os::unix::fs::symlink;
+
+    let (tmp, repo) = setup_repo();
+    let worktree = tmp.path().join("topic");
+    run_git(
+        &repo,
+        &["worktree", "add", "-b", "topic", worktree.to_str().unwrap()],
+    );
+    run_git(&worktree, &["commit", "--allow-empty", "-m", "work"]);
+    run_git(&repo, &["merge", "--no-ff", "topic"]);
+    let tools = tmp.path().join("tools");
+    fs::create_dir(&tools).unwrap();
+    let git = Command::new("/bin/sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    assert!(git.status.success());
+    symlink(
+        String::from_utf8(git.stdout).unwrap().trim(),
+        tools.join("git"),
+    )
+    .unwrap();
+    let output = Command::new(git_waku_bin())
+        .args(["clean", "--yes", "--force"])
+        .env("PATH", &tools)
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("agent check unavailable"));
+    assert!(worktree.exists());
+    run_git(&repo, &["show-ref", "--verify", "refs/heads/topic"]);
+}
+
+#[test]
 fn create_creates_worktree() {
     let (_tmp, repo) = setup_repo();
 
