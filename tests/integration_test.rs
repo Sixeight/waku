@@ -229,6 +229,52 @@ fn create_runs_post_create_hook() {
 }
 
 #[test]
+fn create_returns_before_background_post_create_hook_finishes() {
+    let (_tmp, repo, _bare) = setup_repo_with_remote();
+    run_git(
+        &repo,
+        &[
+            "config",
+            "waku.hook.postcreate",
+            "while [ ! -f .hook-go ]; do sleep 0.05; done; touch .hook-ran",
+        ],
+    );
+    run_git(&repo, &["config", "waku.hook.postcreate.background", "true"]);
+
+    let mut child = Command::new(git_waku_bin())
+        .args(["create", "feature-background-hook", "--no-fetch"])
+        .current_dir(&repo)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-background-hook");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut completed = false;
+    while std::time::Instant::now() < deadline {
+        if let Some(status) = child.try_wait().unwrap() {
+            let mut stderr = String::new();
+            std::io::Read::read_to_string(child.stderr.as_mut().unwrap(), &mut stderr).unwrap();
+            assert!(status.success(), "{stderr}");
+            completed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    fs::write(wt_path.join(".hook-go"), "go").unwrap();
+    assert!(child.wait().unwrap().success());
+    assert!(completed, "create waited for the background hook");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !wt_path.join(".hook-ran").exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(wt_path.join(".hook-ran").exists());
+}
+
+#[test]
 fn create_quiet_suppresses_hook_output() {
     let (_tmp, repo) = setup_repo();
 

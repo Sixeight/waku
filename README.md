@@ -206,6 +206,16 @@ git config --add waku.hook.postCreate "cp .env.example .env"
 git config --add waku.hook.postCreate "direnv allow"
 ```
 
+To start the hooks without waiting for them, set `waku.hook.postcreate.background`:
+
+```sh
+git config waku.hook.postcreate.background true
+```
+
+`create` can return or launch an agent before these hooks finish. Their output
+and failures are written to `waku-post-create.log` in the new worktree's Git
+directory. Hooks remain synchronous by default.
+
 ## Performance measurements
 
 [`scripts/benchmark.py`](scripts/benchmark.py) compares two release binaries using

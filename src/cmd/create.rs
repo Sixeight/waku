@@ -99,7 +99,20 @@ pub(super) fn run_with_config(
         create_copies(root, &wt_path, waku_config, opts.quiet)?;
     }
     apply_worktreeinclude(root, &wt_path, wti_mode, wti_files?, opts.quiet)?;
-    run_post_create_hooks(&wt_path, waku_config, opts.quiet)?;
+    if config_bool(waku_config, "waku.hook.postcreate.background")
+        && !super::config_values(waku_config, "waku.hook.postcreate").is_empty()
+    {
+        let log_path = start_background_hooks(&wt_path, waku_config)?;
+        if !opts.quiet {
+            eprintln!(
+                "  {} Running post-create hooks in background (log: {})",
+                style("↻").cyan(),
+                log_path.display(),
+            );
+        }
+    } else {
+        run_post_create_hooks(&wt_path, waku_config, opts.quiet)?;
+    }
 
     if let Some(plan) = background_fetch {
         let merge_ref = created_from_ref.as_ref().map(|_| plan.merge_ref.as_str());
@@ -188,12 +201,7 @@ fn ref_exists(root: &Path, reference: &str) -> bool {
 }
 
 fn start_background_fetch(root: &Path, wt_path: &Path, merge_ref: Option<&str>) -> Result<PathBuf> {
-    let git_dir = PathBuf::from(git::git_output_in(wt_path, &["rev-parse", "--git-dir"])?);
-    let git_dir = if git_dir.is_absolute() {
-        git_dir
-    } else {
-        wt_path.join(git_dir)
-    };
+    let git_dir = worktree_git_dir(wt_path)?;
     let log_path = git_dir.join("waku-background-fetch.log");
     let stdout = fs::File::create(&log_path)
         .with_context(|| format!("failed to create {}", log_path.display()))?;
@@ -214,6 +222,44 @@ fn start_background_fetch(root: &Path, wt_path: &Path, merge_ref: Option<&str>) 
         .context("failed to start background fetch")?;
 
     Ok(log_path)
+}
+
+fn worktree_git_dir(wt_path: &Path) -> Result<PathBuf> {
+    let git_dir = PathBuf::from(git::git_output_in(wt_path, &["rev-parse", "--git-dir"])?);
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        wt_path.join(git_dir)
+    };
+    Ok(git_dir)
+}
+
+fn start_background_hooks(wt_path: &Path, config: &[(String, String)]) -> Result<PathBuf> {
+    let log_path = worktree_git_dir(wt_path)?.join("waku-post-create.log");
+    let stdout = fs::File::create(&log_path)
+        .with_context(|| format!("failed to create {}", log_path.display()))?;
+    let stderr = stdout.try_clone()?;
+
+    let executable = std::env::current_exe().context("failed to locate git-waku executable")?;
+    let mut command = Command::new(executable);
+    command
+        .arg("__background-hooks")
+        .arg(wt_path)
+        .arg("--")
+        .args(super::config_values(config, "waku.hook.postcreate"));
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .context("failed to start background hooks")?;
+
+    Ok(log_path)
+}
+
+pub fn background_hooks(wt_path: &Path, hooks: &[String]) -> Result<()> {
+    let hooks: Vec<&str> = hooks.iter().map(String::as_str).collect();
+    run_hooks(wt_path, &hooks, false)
 }
 
 pub fn background_fetch(root: &Path, wt_path: &Path, merge_ref: Option<&str>) -> Result<()> {
@@ -445,7 +491,10 @@ fn apply_worktreeinclude(
 
 fn run_post_create_hooks(wt_path: &Path, config: &[(String, String)], quiet: bool) -> Result<()> {
     let hooks = super::config_values(config, "waku.hook.postcreate");
+    run_hooks(wt_path, &hooks, quiet)
+}
 
+fn run_hooks(wt_path: &Path, hooks: &[&str], quiet: bool) -> Result<()> {
     for hook in hooks {
         if !quiet {
             eprintln!("  {} Running {}...", style("▸").cyan(), hook);

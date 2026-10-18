@@ -165,6 +165,12 @@ enum Command {
         worktree: PathBuf,
         merge_ref: Option<String>,
     },
+    #[command(name = "__background-hooks", hide = true)]
+    BackgroundHooks {
+        worktree: PathBuf,
+        #[arg(last = true)]
+        hooks: Vec<String>,
+    },
 }
 
 fn main() {
@@ -232,6 +238,9 @@ fn main() {
             worktree,
             merge_ref,
         }) => cmd::create::background_fetch(&root, &worktree, merge_ref.as_deref()),
+        Some(Command::BackgroundHooks { worktree, hooks }) => {
+            cmd::create::background_hooks(&worktree, &hooks)
+        }
         None => cmd::passthrough(&cli.args),
     };
 
