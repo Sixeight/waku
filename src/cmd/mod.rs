@@ -228,46 +228,90 @@ pub fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>> {
     }
 
     // Combining exclude sources would select their union rather than their intersection.
-    let ignored_entries = git_ignored_paths(root, &["--exclude-standard"])?;
-    let (directories_without_files, ignored): (Vec<_>, Vec<_>) =
-        ignored_entries.into_iter().partition(|path| {
+    let (ignored, included) = std::thread::scope(|scope| {
+        let ignored = scope.spawn(|| git_ignored_paths(root, &["--exclude-standard"], true));
+        let included =
+            scope.spawn(|| git_ignored_paths(root, &["--exclude-from=.worktreeinclude"], true));
+        (ignored.join().unwrap(), included.join().unwrap())
+    });
+    let ignored = ignored?;
+    let included = included?;
+    let has_positive_pattern_after_negation = fs::read_to_string(root.join(".worktreeinclude"))
+        .ok()
+        .is_none_or(|patterns| {
+            let mut saw_negation = false;
+            patterns.lines().any(|line| {
+                if line.starts_with('!') {
+                    saw_negation = true;
+                    false
+                } else {
+                    saw_negation && !line.is_empty() && !line.starts_with('#')
+                }
+            })
+        });
+    if included.iter().all(|entry| !entry.directory) && !has_positive_pattern_after_negation {
+        let ignored_paths: HashSet<_> = ignored.iter().map(|entry| entry.path.as_path()).collect();
+        let ignored_directories: HashSet<_> = ignored
+            .iter()
+            .filter(|entry| entry.directory)
+            .map(|entry| entry.path.as_path())
+            .collect();
+        let mut result: Vec<_> = included
+            .into_iter()
+            .filter(|entry| {
+                ignored_paths.contains(entry.path.as_path())
+                    || entry
+                        .path
+                        .ancestors()
+                        .skip(1)
+                        .any(|parent| ignored_directories.contains(parent))
+            })
+            .map(|entry| entry.path)
+            .collect();
+        result.sort();
+        return Ok(result);
+    }
+
+    let (ignored_entries, included_entries) = std::thread::scope(|scope| {
+        let ignored = scope.spawn(|| git_ignored_paths(root, &["--exclude-standard"], false));
+        let included =
+            scope.spawn(|| git_ignored_paths(root, &["--exclude-from=.worktreeinclude"], false));
+        (ignored.join().unwrap(), included.join().unwrap())
+    });
+    let (directories_without_files, ignored_files): (Vec<_>, Vec<_>) = ignored_entries?
+        .into_iter()
+        .map(|entry| entry.path)
+        .partition(|path| {
             let source = root.join(path);
             source.is_dir() && !source.is_symlink()
         });
-    let included: HashSet<PathBuf> = git_ignored_paths(root, &["--exclude-from=.worktreeinclude"])?
+    let included_files: HashSet<_> = included_entries?
         .into_iter()
+        .map(|entry| entry.path)
         .collect();
-    let mut selected: HashSet<PathBuf> = ignored
+    let mut selected: HashSet<_> = ignored_files
         .iter()
-        .filter(|path| included.contains(*path))
+        .filter(|path| included_files.contains(*path))
         .cloned()
         .collect();
-
-    let directories = git_ignored_paths(
-        root,
-        &["--exclude-standard", "--directory", "--no-empty-directory"],
-    )?;
     let mut result = Vec::new();
-    for directory in directories {
-        let source = root.join(&directory);
-        if !source.is_dir()
-            || source.is_symlink()
+    for entry in ignored {
+        if !entry.directory
             || directories_without_files
                 .iter()
-                .any(|path| path.starts_with(&directory))
+                .any(|path| path.starts_with(&entry.path))
         {
             continue;
         }
-        let contents: Vec<_> = ignored
+        let contents: Vec<_> = ignored_files
             .iter()
-            .filter(|path| path.starts_with(&directory))
+            .filter(|path| path.starts_with(&entry.path))
             .collect();
-        // A directory link or recursive copy must not expose excluded contents.
         if !contents.is_empty() && contents.iter().all(|path| selected.contains(*path)) {
             for path in contents {
                 selected.remove(path);
             }
-            result.push(directory);
+            result.push(entry.path);
         }
     }
     result.extend(selected);
@@ -275,19 +319,35 @@ pub fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>> {
     Ok(result)
 }
 
-fn git_ignored_paths(root: &Path, exclude_args: &[&str]) -> Result<Vec<PathBuf>> {
+struct IgnoredPath {
+    path: PathBuf,
+    directory: bool,
+}
+
+fn git_ignored_paths(
+    root: &Path,
+    exclude_args: &[&str],
+    directories: bool,
+) -> Result<Vec<IgnoredPath>> {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
 
     let mut args = vec!["ls-files", "--others", "--ignored", "-z"];
     args.extend_from_slice(exclude_args);
+    if directories {
+        args.extend_from_slice(&["--directory", "--no-empty-directory"]);
+    }
     let output = git::git_output_raw_in(root, &args)?;
     Ok(output
         .split(|byte| *byte == 0)
         .filter(|path| !path.is_empty())
         .map(|path| {
+            let directory = path.ends_with(b"/");
             let path = path.strip_suffix(b"/").unwrap_or(path);
-            PathBuf::from(OsString::from_vec(path.to_vec()))
+            IgnoredPath {
+                path: PathBuf::from(OsString::from_vec(path.to_vec())),
+                directory,
+            }
         })
         .collect())
 }
