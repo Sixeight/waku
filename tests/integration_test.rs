@@ -2360,6 +2360,50 @@ fn create_uses_fetch_config() {
 }
 
 #[test]
+fn create_fetches_cached_default_branch_in_background_without_agent() {
+    let (_tmp, repo, bare) = setup_repo_with_remote();
+    let upstream = repo.parent().unwrap().join("upstream-next");
+    run_git(
+        repo.parent().unwrap(),
+        &["clone", bare.to_str().unwrap(), upstream.to_str().unwrap()],
+    );
+    run_git(&upstream, &["config", "user.email", "test@test.com"]);
+    run_git(&upstream, &["config", "user.name", "Test"]);
+    run_git(&upstream, &["config", "commit.gpgsign", "false"]);
+    fs::write(upstream.join("after-fetch.txt"), "fetched\n").unwrap();
+    run_git(&upstream, &["add", "."]);
+    run_git(&upstream, &["commit", "-m", "advance main"]);
+    run_git(&upstream, &["push", "origin", "main"]);
+    run_git(&repo, &["config", "waku.create.fetch", "true"]);
+    run_git(
+        &repo,
+        &["config", "waku.create.from-default-branch", "true"],
+    );
+
+    let output = run_waku(&repo, &["create", "background-config"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Fetching origin in background"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/background-config");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !wt_path.join("after-fetch.txt").exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(wt_path.join("after-fetch.txt").exists());
+}
+
+#[test]
 fn create_uses_from_default_branch_config() {
     let (_tmp, repo, bare) = setup_repo_with_remote();
 

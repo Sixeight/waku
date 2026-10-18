@@ -155,12 +155,12 @@ fn background_fetch_plan(
     from_default_branch: bool,
     fetch: bool,
 ) -> Result<Option<BackgroundFetchPlan>> {
-    if !fetch || !opts.agent || opts.fetch {
+    if !fetch || opts.fetch {
         return Ok(None);
     }
 
     let merge_ref = if let Some(from_ref) = opts.from.as_deref() {
-        if !is_origin_tracking_ref(from_ref) || !ref_exists(root, from_ref) {
+        if !is_origin_tracking_ref(from_ref) {
             return Ok(None);
         }
         from_ref.to_string()
@@ -168,14 +168,14 @@ fn background_fetch_plan(
         let Ok(default_ref) = git::remote_default_branch_ref(root) else {
             return Ok(None);
         };
-        if !ref_exists(root, &default_ref) {
-            return Ok(None);
-        }
         default_ref
     } else {
         format!("origin/{branch}")
     };
 
+    if !ref_exists(root, &merge_ref) {
+        return Ok(None);
+    }
     Ok(Some(BackgroundFetchPlan { merge_ref }))
 }
 
