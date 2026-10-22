@@ -1,9 +1,17 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub(crate) fn map<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync) -> Vec<U> {
+    map_with_limit(items, 8, f)
+}
+
+pub(crate) fn map_with_limit<T: Sync, U: Send>(
+    items: &[T],
+    limit: usize,
+    f: impl Fn(&T) -> U + Sync,
+) -> Vec<U> {
     let workers = std::thread::available_parallelism()
         .map_or(1, usize::from)
-        .min(8)
+        .min(limit.max(1))
         .min(items.len());
     if workers <= 1 {
         return items.iter().map(f).collect();
@@ -68,6 +76,16 @@ mod tests {
         seen.sort_unstable();
         assert_eq!(seen, items);
         assert!(peak.load(Ordering::Relaxed) <= 8);
+    }
+
+    #[test]
+    fn single_worker_uses_the_calling_thread_and_preserves_order() {
+        let caller = std::thread::current().id();
+        let results = map_with_limit(&[3, 2, 1], 1, |item| {
+            assert_eq!(std::thread::current().id(), caller);
+            item * 2
+        });
+        assert_eq!(results, [6, 4, 2]);
     }
 
     #[test]

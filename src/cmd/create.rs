@@ -559,7 +559,7 @@ fn copy_entries_parallel(
         Some(spinner(format!("Copying {label}")))
     };
 
-    let results = crate::parallel::map(names, |name| {
+    let results = crate::parallel::map_with_limit(names, 4, |name| {
         let source = root.join(name);
         let target = wt_path.join(name);
         let result = remove_existing(&target).and_then(|_| {

@@ -401,10 +401,19 @@ pub fn copy_recursive_parallel(src: &Path, dst: &Path, excludes: &[PathBuf]) -> 
     let entries: Vec<_> = fs::read_dir(src)
         .with_context(|| format!("failed to read dir: {}", src.display()))?
         .collect::<std::io::Result<_>>()?;
-    // Splitting only the top directory keeps nested trees within the worker limit.
-    crate::parallel::map(&entries, |entry| copy_directory_entry(entry, dst, excludes))
-        .into_iter()
-        .collect()
+    if let [entry] = entries.as_slice() {
+        let source = entry.path();
+        if !excludes.iter().any(|exclude| source.starts_with(exclude))
+            && entry.file_type()?.is_dir()
+        {
+            return copy_recursive_parallel(&source, &dst.join(entry.file_name()), excludes);
+        }
+    }
+    crate::parallel::map_with_limit(&entries, 4, |entry| {
+        copy_directory_entry(entry, dst, excludes)
+    })
+    .into_iter()
+    .collect()
 }
 
 fn copy_directory(src: &Path, dst: &Path, excludes: &[PathBuf]) -> Result<()> {
@@ -478,6 +487,34 @@ mod tests {
         assert!(!excluded.exists());
         std::os::unix::fs::symlink(src.join("missing"), src.join("broken-link")).unwrap();
         assert!(copy_recursive_parallel(&src, &dst, &[]).is_err());
+    }
+
+    #[test]
+    fn parallel_directory_copy_preserves_directory_chains_and_exclusions() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("source");
+        let dst = tmp.path().join("destination");
+        let files = src.join("cache/packages");
+        fs::create_dir_all(files.join("empty")).unwrap();
+        for index in 0..16 {
+            fs::write(files.join(index.to_string()), index.to_string()).unwrap();
+        }
+        let excluded = files.join("3");
+        copy_recursive_parallel(&src, &dst, &[excluded]).unwrap();
+        assert!(dst.join("cache/packages/empty").is_dir());
+        for index in 0..16 {
+            let target = dst.join(format!("cache/packages/{index}"));
+            if index == 3 {
+                assert!(!target.exists());
+            } else {
+                assert_eq!(fs::read_to_string(target).unwrap(), index.to_string());
+            }
+        }
+
+        let filtered = tmp.path().join("filtered");
+        copy_recursive_parallel(&src, &filtered, &[files]).unwrap();
+        assert!(filtered.join("cache").is_dir());
+        assert!(!filtered.join("cache/packages").exists());
     }
 
     #[test]
