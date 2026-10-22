@@ -232,6 +232,21 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     // Dirty check + commit info in parallel
     let (agents, dirty_set, commit_info, unique_commits) = std::thread::scope(|scope| {
         let agents = scope.spawn(agents::ActiveAgents::inspect);
+        let counts_by_oid = match (check_refs.as_slice(), merge_targets.as_slice()) {
+            ([_], [target]) => {
+                let branches: Vec<_> = to_remove
+                    .iter()
+                    .filter(|(path, _)| gone_set.contains(path))
+                    .filter_map(|(_, branch)| branch.as_deref())
+                    .collect();
+                if branches.len() > 1 {
+                    git::unique_commit_counts(&root, &target.commit, &branches).ok()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
         let results = parallel::map(&to_remove, |(path, branch)| {
             let is_unchanged = unchanged_set.contains(path);
             let needs_unique_count = gone_set.contains(path) || branch.is_none();
@@ -249,7 +264,11 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
             let unique_count = if is_unchanged {
                 Some(0)
             } else if needs_unique_count {
-                git::unique_commit_count(wt_path, &check_refs)
+                heads
+                    .get(path.as_str())
+                    .and_then(|head| counts_by_oid.as_ref()?.get(*head))
+                    .copied()
+                    .or_else(|| git::unique_commit_count(wt_path, &check_refs))
             } else {
                 None
             };

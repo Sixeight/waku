@@ -289,6 +289,35 @@ pub fn unique_commit_count(dir: &Path, target_refs: &[String]) -> Option<usize> 
     git_output_in(dir, &args).ok()?.parse::<usize>().ok()
 }
 
+/// Key counts by commit ID so a moved branch cannot reuse another tip's count.
+pub fn unique_commit_counts(
+    dir: &Path,
+    target: &str,
+    branches: &[&str],
+) -> Result<HashMap<String, usize>> {
+    if branches.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let patterns: Vec<_> = branches
+        .iter()
+        .map(|branch| format!("refs/heads/{branch}"))
+        .collect();
+    let format = format!("--format=%(objectname)%00%(ahead-behind:{target})");
+    let mut args = vec!["for-each-ref", &format, "--"];
+    args.extend(patterns.iter().map(String::as_str));
+    let raw = git_output_in(dir, &args)?;
+    raw.lines()
+        .map(|line| {
+            let (tip, counts) = line.split_once('\0').context("missing commit count")?;
+            let (ahead, _) = counts.split_once(' ').context("missing behind count")?;
+            Ok((
+                tip.to_string(),
+                ahead.parse().context("invalid ahead count")?,
+            ))
+        })
+        .collect()
+}
+
 /// Parse `git worktree list --porcelain` output into (path, branch) pairs.
 pub fn worktree_list(dir: &Path) -> Result<Vec<(String, Option<String>)>> {
     Ok(worktree_details(dir)?
@@ -545,6 +574,50 @@ mod tests {
             .find(|(k, _)| k == "waku.command.editor")
             .map(|(_, v)| v.as_str());
         assert_eq!(value, Some("nvim\n--clean"));
+    }
+
+    #[test]
+    fn unique_commit_counts_match_git_for_diverged_and_shared_branch_tips() {
+        let tmp = setup_repo();
+        let repo = tmp.path();
+        if git_output_in(
+            repo,
+            &[
+                "for-each-ref",
+                "--format=%(ahead-behind:HEAD)",
+                "refs/heads/main",
+            ],
+        )
+        .is_err()
+        {
+            return;
+        }
+        git(repo, &["checkout", "-qb", "topic-a"]);
+        git(repo, &["commit", "--allow-empty", "-qm", "a1"]);
+        git(repo, &["commit", "--allow-empty", "-qm", "a2"]);
+        git(repo, &["branch", "topic-alias"]);
+        let topic_a = git(repo, &["rev-parse", "HEAD"]);
+        git(repo, &["checkout", "-q", "main"]);
+        git(repo, &["commit", "--allow-empty", "-qm", "main"]);
+        let main = git(repo, &["rev-parse", "HEAD"]);
+        git(repo, &["checkout", "-qb", "topic-b"]);
+        git(repo, &["commit", "--allow-empty", "-qm", "b1"]);
+        let topic_b = git(repo, &["rev-parse", "HEAD"]);
+
+        let branches = ["topic-a", "topic-alias", "topic-b", "main", "missing"];
+        let counts = unique_commit_counts(repo, &main, &branches).unwrap();
+        assert_eq!(
+            counts,
+            HashMap::from([(topic_a, 2), (topic_b, 1), (main, 0)])
+        );
+        for branch in &branches[..4] {
+            let tip = git(repo, &["rev-parse", branch]);
+            let count: usize = git(repo, &["rev-list", "--count", branch, "--not", "main"])
+                .parse()
+                .unwrap();
+            assert_eq!(counts.get(&tip), Some(&count));
+        }
+        assert!(unique_commit_counts(repo, "main", &[]).unwrap().is_empty());
     }
 
     #[test]
