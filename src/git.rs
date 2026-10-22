@@ -5,6 +5,10 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
+mod merge;
+
+pub use merge::merge_noop_results;
+
 /// Run a git command and return its stdout as a trimmed string.
 pub fn git_output(args: &[&str]) -> Result<String> {
     let output = Command::new("git")

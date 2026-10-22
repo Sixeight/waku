@@ -133,16 +133,44 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         })
         .collect();
 
-    // Run is_merge_noop in parallel for unresolved candidates
     let unresolved: Vec<_> = candidates
         .iter()
         .filter(|(_, _, already_merged)| !already_merged)
         .collect();
-    let merged_results = parallel::map(&unresolved, |(_, branch, _)| {
-        merge_targets
+    let mut merged_results = vec![false; unresolved.len()];
+    for target in &merge_targets {
+        let pending: Vec<_> = unresolved
             .iter()
-            .any(|target| git::is_merge_noop_with_target(&root, target, branch).unwrap_or(false))
-    });
+            .enumerate()
+            .filter(|(index, _)| !merged_results[*index])
+            .collect();
+        if pending.is_empty() {
+            break;
+        }
+        let batches: Vec<_> = pending.chunks(8).collect();
+        let groups: Result<Vec<Vec<bool>>> = parallel::map(&batches, |batch| {
+            let sources: Vec<_> = batch
+                .iter()
+                .map(|(_, candidate)| candidate.1.as_str())
+                .collect();
+            if sources.len() == 1 {
+                git::is_merge_noop_with_target(&root, target, sources[0]).map(|result| vec![result])
+            } else {
+                git::merge_noop_results(&root, target, &sources)
+            }
+        })
+        .into_iter()
+        .collect();
+        let flags: Vec<_> = match groups {
+            Ok(groups) => groups.into_iter().flatten().collect(),
+            Err(_) => parallel::map(&pending, |(_, candidate)| {
+                git::is_merge_noop_with_target(&root, target, &candidate.1).unwrap_or(false)
+            }),
+        };
+        for ((index, _), merged) in pending.into_iter().zip(flags) {
+            merged_results[index] = merged;
+        }
+    }
     let merged_candidates: Vec<(String, String)> = candidates
         .iter()
         .filter(|(_, _, already_merged)| *already_merged)
