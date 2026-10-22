@@ -99,9 +99,10 @@ pub fn config_get_regexp_in(dir: &Path, pattern: &str) -> Result<Vec<(String, St
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout
         .split('\0')
-        .filter_map(|entry| {
-            let (key, value) = entry.split_once('\n')?;
-            Some((key.to_string(), value.to_string()))
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let (key, value) = entry.split_once('\n').unwrap_or((entry, ""));
+            (key.to_string(), value.to_string())
         })
         .collect())
 }

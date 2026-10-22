@@ -32,7 +32,7 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
         Some(ref r) => r.clone(),
         None => worktree::repo_root()?,
     };
-    let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
+    let waku_config = git::config_get_regexp_in(&root, r"^(waku\.|checkout\.workers$)")?;
     run_with_config(branch, opts, &root, &waku_config)
 }
 
@@ -78,6 +78,7 @@ pub(super) fn run_with_config(
             opts.from.as_deref(),
             from_default_branch,
             opts.quiet,
+            waku_config,
         );
 
         let sp = if !opts.quiet && !wti_handle.is_finished() {
@@ -308,6 +309,7 @@ fn create_worktree(
     from: Option<&str>,
     from_default_branch: bool,
     quiet: bool,
+    config: &[(String, String)],
 ) -> Result<Option<String>> {
     if wt_path.exists() {
         if !quiet {
@@ -328,7 +330,7 @@ fn create_worktree(
     let wt_path_str = wt_path.to_string_lossy();
     let (local_exists, remote_exists) = git::branch_refs_exist(root, branch)?;
     let mut add_args = Vec::new();
-    if git::git_output_in(root, &["config", "--get", "checkout.workers"]).is_err() {
+    if !config.iter().any(|(key, _)| key == "checkout.workers") {
         add_args.extend_from_slice(&["-c", "checkout.workers=8"]);
     }
     add_args.extend_from_slice(&["worktree", "add"]);

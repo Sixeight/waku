@@ -89,6 +89,79 @@ fn run_waku(dir: &Path, args: &[&str]) -> std::process::Output {
 // --- Tests ---
 
 #[test]
+fn create_preserves_git_validation_of_valueless_checkout_workers() {
+    let (_tmp, repo) = setup_repo();
+    use std::io::Write;
+    let mut config = fs::OpenOptions::new()
+        .append(true)
+        .open(repo.join(".git/config"))
+        .unwrap();
+    writeln!(config, "[checkout]\nworkers").unwrap();
+    let output = Command::new(git_waku_bin())
+        .args(["create", "invalid-workers", "--no-fetch"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("checkout.workers"));
+}
+
+#[test]
+fn create_reuses_checkout_workers_config_without_an_extra_lookup() {
+    let (_tmp, repo) = setup_repo();
+    for (branch, workers, command) in [
+        ("default-workers", None, "create"),
+        ("configured-workers", Some("2"), "create"),
+        ("open-configured-workers", Some("2"), "open"),
+    ] {
+        if let Some(workers) = workers {
+            run_git(&repo, &["config", "checkout.workers", workers]);
+        }
+        let trace = repo.join(".git").join("waku-trace");
+        let events = repo.join(".git").join("waku-events");
+        fs::write(&trace, "").unwrap();
+        fs::write(&events, "").unwrap();
+        let mut process = Command::new(git_waku_bin());
+        process.args([command, branch]);
+        if command == "create" {
+            process.arg("--no-fetch");
+        } else {
+            process.arg("--editor=/usr/bin/true");
+        }
+        let output = process
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_TRACE", &trace)
+            .env("GIT_TRACE2_EVENT", &events)
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let trace = fs::read_to_string(trace).unwrap();
+        assert!(!trace.contains("config --get checkout.workers"), "{trace}");
+        let events = fs::read_to_string(events).unwrap();
+        assert_eq!(
+            events.contains("\"checkout.workers=8\""),
+            workers.is_none(),
+            "{events}"
+        );
+        assert!(repo
+            .parent()
+            .unwrap()
+            .join("myrepo-worktrees")
+            .join(branch)
+            .join("README.md")
+            .exists());
+    }
+}
+
+#[test]
 #[cfg(unix)]
 #[ignore = "requires permission to inspect real processes"]
 fn clean_keeps_worktrees_used_by_an_agent_even_with_force() {
