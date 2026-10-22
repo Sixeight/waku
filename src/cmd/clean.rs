@@ -217,6 +217,11 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         }
     }
 
+    if to_remove.is_empty() {
+        println!("No worktrees to clean.");
+        return Ok(());
+    }
+
     let commit_ids: HashSet<_> = to_remove
         .iter()
         .filter_map(|(path, _)| heads.get(path.as_str()).copied())
@@ -225,11 +230,8 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     let commits_by_oid = git::commit_info(&root, &commit_ids).unwrap_or_default();
 
     // Dirty check + commit info in parallel
-    let (dirty_set, commit_info, unique_commits): (
-        HashSet<String>,
-        HashMap<String, CommitInfo>,
-        HashMap<String, usize>,
-    ) = {
+    let (agents, dirty_set, commit_info, unique_commits) = std::thread::scope(|scope| {
+        let agents = scope.spawn(agents::ActiveAgents::inspect);
         let results = parallel::map(&to_remove, |(path, branch)| {
             let is_unchanged = unchanged_set.contains(path);
             let needs_unique_count = gone_set.contains(path) || branch.is_none();
@@ -274,8 +276,8 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
                 unique_commits.insert(path, count);
             }
         }
-        (dirty, commits, unique_commits)
-    };
+        (agents.join().unwrap(), dirty, commits, unique_commits)
+    });
 
     // Summary of found worktrees
     let unchanged_count = unchanged_set.len();
@@ -310,12 +312,6 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         );
     }
 
-    if to_remove.is_empty() {
-        println!("No worktrees to clean.");
-        return Ok(());
-    }
-
-    let agents = agents::ActiveAgents::inspect();
     if let Err(error) = &agents {
         print_warning("agent check unavailable; worktrees will be kept", error);
     }
