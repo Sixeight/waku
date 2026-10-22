@@ -26,6 +26,9 @@ fn spinner_style() -> ProgressStyle {
 
 pub fn spinner(msg: String) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
+    if pb.is_hidden() {
+        return pb;
+    }
     pb.set_style(spinner_style());
     pb.set_prefix("ﾜ");
     pb.set_message(msg);
