@@ -140,3 +140,104 @@ fn dirty_check_fails_closed_on_git_errors() {
     let empty = TempDir::new().unwrap();
     assert!(is_worktree_dirty(empty.path(), &[]));
 }
+
+#[test]
+fn dirty_check_excludes_literal_nested_paths_without_hiding_siblings() {
+    for artifact in [
+        "cache/generated.txt",
+        "cache/[generated]*",
+        "cache/:magic",
+        "cache/日本語\nfile",
+    ] {
+        let tmp = repository();
+        let root = tmp.path();
+        let config = artifact_config(artifact);
+        fs::create_dir(root.join("cache")).unwrap();
+        fs::write(root.join(artifact), "generated\n").unwrap();
+        assert!(!is_worktree_dirty(root, &config), "{artifact}");
+        fs::write(root.join("cache/user.txt"), "user data\n").unwrap();
+        assert!(is_worktree_dirty(root, &config), "{artifact}");
+    }
+}
+
+#[test]
+fn dirty_check_keeps_literal_behavior_for_paths_git_would_normalize() {
+    let tmp = repository();
+    let root = tmp.path();
+    fs::write(root.join("artifacts/tracked.txt"), "modified\n").unwrap();
+    for artifact in [
+        "",
+        ".",
+        "./artifacts",
+        "artifacts/",
+        "artifacts//tracked.txt",
+        "artifacts/../artifacts",
+    ] {
+        assert!(
+            is_worktree_dirty(root, &artifact_config(artifact)),
+            "{artifact}"
+        );
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dirty_check_keeps_non_utf8_user_files() {
+    use std::os::unix::ffi::OsStringExt;
+    let tmp = repository();
+    let root = tmp.path();
+    let directory = root.join("user");
+    fs::create_dir(&directory).unwrap();
+    fs::write(
+        directory.join(std::ffi::OsString::from_vec(vec![0xff])),
+        "user data\n",
+    )
+    .unwrap();
+    assert!(is_worktree_dirty(root, &artifact_config("artifacts")));
+}
+
+#[test]
+fn dirty_check_keeps_case_distinct_paths() {
+    let tmp = repository();
+    let root = tmp.path();
+    fs::write(root.join("artifacts/tracked.txt"), "modified\n").unwrap();
+    git(root, &["config", "core.ignorecase", "true"]);
+    assert!(is_worktree_dirty(root, &artifact_config("ARTIFACTS")));
+}
+
+#[test]
+fn remove_keeps_dirty_worktrees_when_pathspec_environment_changes_matching() {
+    for variable in [
+        "GIT_LITERAL_PATHSPECS",
+        "GIT_ICASE_PATHSPECS",
+        "GIT_GLOB_PATHSPECS",
+        "GIT_NOGLOB_PATHSPECS",
+    ] {
+        let tmp = repository();
+        let root = tmp.path();
+        let worktree = root.join("topic");
+        git(
+            root,
+            &[
+                "worktree",
+                "add",
+                "-qb",
+                "topic",
+                worktree.to_str().unwrap(),
+            ],
+        );
+        git(root, &["config", "waku.copy.include", "ARTIFACTS"]);
+        fs::write(worktree.join("artifacts/tracked.txt"), "user data\n").unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_git-waku"))
+            .args(["remove", worktree.to_str().unwrap(), "--keep-branch"])
+            .current_dir(root)
+            .env(variable, "1")
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "{variable}: dirty worktree was removed"
+        );
+        assert!(worktree.exists(), "{variable}");
+    }
+}

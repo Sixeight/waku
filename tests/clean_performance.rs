@@ -309,3 +309,11 @@ fn clean_falls_back_when_git_rejects_batch_merges() {
         "{trace}"
     );
 }
+
+#[test]
+fn clean_limits_untracked_file_enumeration() {
+    let fixture = Fixture::new(false);
+    let (_, trace) = fixture.clean(None);
+    assert!(trace.contains("--untracked-files=normal"), "{trace}");
+    assert!(!trace.contains("--untracked-files=all"), "{trace}");
+}

@@ -87,18 +87,47 @@ pub fn is_worktree_dirty(path: &Path, config: &[(String, String)]) -> bool {
         waku_entries.contains(line) || waku_prefixes.iter().any(|p| line.starts_with(p.as_str()))
     };
 
-    let status = match git::git_output_raw_in(
-        path,
-        &[
-            "--no-optional-locks",
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--ignore-submodules=none",
-            "--no-renames",
-        ],
-    ) {
+    // Git's pathspec environment can turn exclusions into inclusions.
+    let pathspec_defaults = [
+        "GIT_LITERAL_PATHSPECS",
+        "GIT_GLOB_PATHSPECS",
+        "GIT_NOGLOB_PATHSPECS",
+        "GIT_ICASE_PATHSPECS",
+    ]
+    .iter()
+    .all(|variable| std::env::var_os(variable).is_none());
+    let literal_paths = pathspec_defaults
+        && waku_entries.iter().all(|entry| {
+            entry
+                .split('/')
+                .all(|component| !component.is_empty() && component != "." && component != "..")
+        });
+    let exclusions: Vec<_> = if literal_paths {
+        waku_entries
+            .iter()
+            .map(|entry| format!(":(top,literal,exclude){entry}"))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut args = vec![
+        "--no-optional-locks",
+        "status",
+        "--porcelain=v1",
+        "-z",
+        if literal_paths {
+            "--untracked-files=normal"
+        } else {
+            "--untracked-files=all"
+        },
+        "--ignore-submodules=none",
+        "--no-renames",
+    ];
+    if !exclusions.is_empty() {
+        args.push("--");
+        args.extend(exclusions.iter().map(String::as_str));
+    }
+    let status = match git::git_output_raw_in(path, &args) {
         Ok(output) => output,
         Err(_) => return true,
     };
