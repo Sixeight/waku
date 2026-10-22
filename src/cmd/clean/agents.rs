@@ -34,16 +34,21 @@ impl ActiveAgents {
         );
         pids.sort_unstable();
         pids.dedup();
-        Ok(Self {
-            directories: process_directories(&pids)?,
-        })
+        Ok(Self::from_directories(process_directories(&pids)?))
+    }
+
+    fn from_directories(directories: Vec<PathBuf>) -> Self {
+        let mut directories: Vec<_> = directories.iter().map(|path| normalized(path)).collect();
+        directories.sort_unstable();
+        directories.dedup();
+        Self { directories }
     }
 
     pub(super) fn uses(&self, worktree: &Path) -> bool {
         let worktree = normalized(worktree);
         self.directories
             .iter()
-            .any(|cwd| normalized(cwd).starts_with(&worktree))
+            .any(|cwd| cwd.starts_with(&worktree))
     }
 
     pub(super) fn ensure_unused(&self, worktree: &Path) -> Result<()> {
@@ -213,6 +218,23 @@ mod tests {
         };
         assert!(agents.ensure_unused(Path::new("/repo/topic")).is_err());
         assert!(agents.ensure_unused(Path::new("/repo/topic-other")).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn agent_snapshot_preserves_canonical_working_directories() {
+        let temporary = tempfile::TempDir::new().unwrap();
+        let active = temporary.path().join("active");
+        let other = temporary.path().join("other");
+        let link = temporary.path().join("link");
+        std::fs::create_dir(&active).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        std::os::unix::fs::symlink(&active, &link).unwrap();
+        let agents = ActiveAgents::from_directories(vec![link.clone(), active.clone()]);
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&other, &link).unwrap();
+        assert!(agents.uses(&active));
+        assert!(!agents.uses(&other));
     }
 
     #[test]
