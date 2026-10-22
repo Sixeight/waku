@@ -138,6 +138,7 @@ def main():
         "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+00:00",
         "LC_ALL": "C", "LANG": "C", "TERM": "dumb", "NO_COLOR": "1",
         "CLICOLOR": "0", "CLICOLOR_FORCE": "0",
+        "COLUMNS": "240", "LINES": "60",
     })
     results = {}
     evidence = {}
@@ -172,6 +173,16 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="waku-benchmark-") as temporary:
         parent = Path(temporary).resolve()
+        for name, command in (("help", ["--help"]),
+                              ("completions_zsh", ["completions", "zsh"])):
+            def verify_text(result):
+                if not result.stdout.strip():
+                    raise AssertionError("missing CLI output")
+                return result.stdout.replace(
+                    f"Usage: {Path(result.args[0]).name}", "Usage: git-waku"
+                )
+
+            measure(name, parent, command, verify=verify_text)
         clean_root, branches = setup_clean(parent / "clean", env, args.candidates)
         initial_worktrees = git(clean_root, env, "worktree", "list", "--porcelain")
 
@@ -256,6 +267,7 @@ def main():
         "candidates": args.candidates,
         "files": args.files,
         "binaries": {label: str(binary) for label, binary in binaries},
+        "binary_bytes": {label: binary.stat().st_size for label, binary in binaries},
         "binary_sha256": {
             label: hashlib.sha256(binary.read_bytes()).hexdigest()
             for label, binary in binaries

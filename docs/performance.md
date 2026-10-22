@@ -27,6 +27,12 @@ Network fetch latency, editor startup, and post-create hooks are not represented
 by these fixtures. Repository size, filesystem, and other running applications
 affect the timings. Run the comparison without concurrent builds or tests.
 
+2026-10-22 の速度とバイナリサイズの比較は [追加の測定記録](performance-2026-10-22.md) を参照。
+コピー処理の並列数とディレクトリ構造の比較は [コピーの追加測定](performance-copy-2026-10-22.md) を参照。
+clean のコミット数取得の比較は [clean の追加測定](performance-clean-2026-10-22.md) を参照。
+clean の squash-merge 判定の比較は [merge-tree の追加測定](performance-merge-2026-10-22.md) を参照。
+dirty 判定、エージェントのパス比較、補完処理のサイズは [status と補完の追加測定](performance-status-2026-10-22.md) を参照。
+
 ## Results on 2026-09-22
 
 Measured on macOS 27.0 arm64 with Git 2.55.0, comparing the release build of
@@ -63,11 +69,22 @@ reused during squash-merge detection. The dirty check uses NUL-delimited Git
 status with optional index writes disabled. It still protects tracked and
 untracked files, including staged changes and dirty submodules.
 
+dirty 判定は生成物を Git の pathspec で除外し、対象外の未追跡ディレクトリをまとめて取得する。
+パスの意味が変わる設定や環境変数がある場合は従来の取得方式を使う。
+エージェントの cwd は各検査内で正規化して再利用し、削除直前には再検査する。
+補完はビルド時に共通の CLI 定義から生成し、実行時は生成済みの出力を表示する。
+
+比較先が1コミットにまとまる場合、upstream が削除された複数ブランチの固有コミット数も一括取得する。
+比較先が複数の場合や一括取得が失敗した場合は、worktree ごとの取得を使う。
+
+squash-merge 判定は8件ずつ `git merge-tree --stdin` に渡し、最大8並列で処理する。
+一括処理が失敗した場合は個別判定に戻す。競合した結果を統合済みとは判定しない。
+
 Worktree resolution and removal reuse configuration and worktree listings.
-Copy and clean workers are capped at eight or the available CPU count, whichever
-is smaller. A single directory copy splits its immediate children across those
-workers; deeper traversal stays sequential within each worker. Symlink following
-and configured copy exclusions retain their existing behavior.
+コピーは最大4並列、clean は最大8並列で、CPU数が少ない場合はその数を上限にする。
+コピー元が単一ディレクトリの連続なら、枝分かれする場所まで進んでから並列化する。
+各ワーカー内の再帰コピーは逐次実行し、ワーカーを入れ子に作らない。
+シンボリックリンクの参照先をコピーする動作と、除外設定の動作は維持する。
 
 ## Validation
 

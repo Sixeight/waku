@@ -1,0 +1,770 @@
+{
+  "dirty_only": {
+    "repetitions": 7,
+    "warmups": 1,
+    "history": 0,
+    "artifact_files_per_worktree": 2000,
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "git_version": "git version 2.56.0",
+    "binary_bytes": {
+      "baseline": 969696,
+      "candidate": 969696
+    },
+    "binary_sha256": {
+      "baseline": "1f18857729f04b83cba83486d19c9f21e1f65af644c58a35c2cdc21a967e5636",
+      "candidate": "57010957dce43f09b8edc48a8a9cc6d8a8d4cf3cdd36cc1087eb257be52c4aa9"
+    },
+    "results": {
+      "gone_24": {
+        "baseline": {
+          "median_ms": 235.991,
+          "samples_ms": [
+            244.261,
+            243.566,
+            228.904,
+            233.642,
+            231.245,
+            235.991,
+            253.362
+          ],
+          "median_cpu_ms": 598.329,
+          "cpu_samples_ms": [
+            531.144,
+            641.498,
+            585.3,
+            582.542,
+            612.538,
+            644.764,
+            598.329
+          ],
+          "profile": {
+            "git_processes": 41,
+            "unique_count_processes": 0,
+            "batch_count_processes": 1,
+            "single_merge_processes": 0,
+            "batch_merge_processes": 3,
+            "command_counts": {
+              "--no-optional-locks": 24,
+              "/private/var/folders/pd/bf3gnx8n4lld7xsgcfc1gvfc0000gn/T/waku-clean-wvkbem5z/gone-24/origin.git": 1,
+              "branch": 1,
+              "config": 1,
+              "fetch": 1,
+              "for-each-ref": 2,
+              "log": 1,
+              "merge-tree": 3,
+              "rev-list": 1,
+              "rev-parse": 5,
+              "worktree": 1
+            }
+          }
+        },
+        "candidate": {
+          "median_ms": 218.534,
+          "samples_ms": [
+            215.742,
+            254.525,
+            210.931,
+            219.336,
+            221.851,
+            215.711,
+            218.534
+          ],
+          "median_cpu_ms": 418.006,
+          "cpu_samples_ms": [
+            393.266,
+            427.62,
+            418.006,
+            422.146,
+            412.975,
+            416.187,
+            452.506
+          ],
+          "profile": {
+            "git_processes": 41,
+            "unique_count_processes": 0,
+            "batch_count_processes": 1,
+            "single_merge_processes": 0,
+            "batch_merge_processes": 3,
+            "command_counts": {
+              "--no-optional-locks": 24,
+              "/private/var/folders/pd/bf3gnx8n4lld7xsgcfc1gvfc0000gn/T/waku-clean-wvkbem5z/gone-24/origin.git": 1,
+              "branch": 1,
+              "config": 1,
+              "fetch": 1,
+              "for-each-ref": 2,
+              "log": 1,
+              "merge-tree": 3,
+              "rev-list": 1,
+              "rev-parse": 5,
+              "worktree": 1
+            }
+          }
+        }
+      }
+    },
+    "behavior_checks": "candidate output, registered worktrees and refs checked every run"
+  },
+  "agent_end_to_end": {
+    "repetitions": 7,
+    "warmups": 1,
+    "history": 0,
+    "artifact_files_per_worktree": 0,
+    "fixture_agents": 32,
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "git_version": "git version 2.56.0",
+    "binary_bytes": {
+      "status": 969696,
+      "agents": 969712
+    },
+    "binary_sha256": {
+      "status": "57010957dce43f09b8edc48a8a9cc6d8a8d4cf3cdd36cc1087eb257be52c4aa9",
+      "agents": "d6433f1ec81faef3509ef56d5d7ab75cb1845fa368c4bd3c49943d55c2be2be7"
+    },
+    "results": {
+      "gone_192": {
+        "status": {
+          "median_ms": 842.965,
+          "samples_ms": [
+            1049.394,
+            827.787,
+            844.135,
+            833.855,
+            966.995,
+            842.965,
+            822.543
+          ],
+          "median_cpu_ms": 2220.113,
+          "cpu_samples_ms": [
+            2205.423,
+            2234.655,
+            2270.244,
+            2199.903,
+            2249.321,
+            2220.113,
+            2208.418
+          ],
+          "profile": {
+            "git_processes": 230,
+            "unique_count_processes": 0,
+            "batch_count_processes": 1,
+            "single_merge_processes": 0,
+            "batch_merge_processes": 24,
+            "command_counts": {
+              "--no-optional-locks": 192,
+              "/private/var/folders/pd/bf3gnx8n4lld7xsgcfc1gvfc0000gn/T/waku-clean-l2akummx/gone-192/origin.git": 1,
+              "branch": 1,
+              "config": 1,
+              "fetch": 1,
+              "for-each-ref": 2,
+              "log": 1,
+              "merge-tree": 24,
+              "rev-list": 1,
+              "rev-parse": 5,
+              "worktree": 1
+            }
+          }
+        },
+        "agents": {
+          "median_ms": 868.616,
+          "samples_ms": [
+            991.289,
+            868.616,
+            903.772,
+            771.202,
+            884.236,
+            754.163,
+            769.689
+          ],
+          "median_cpu_ms": 2158.954,
+          "cpu_samples_ms": [
+            2278.857,
+            2219.446,
+            2212.206,
+            2158.954,
+            2132.918,
+            2102.128,
+            2145.029
+          ],
+          "profile": {
+            "git_processes": 230,
+            "unique_count_processes": 0,
+            "batch_count_processes": 1,
+            "single_merge_processes": 0,
+            "batch_merge_processes": 24,
+            "command_counts": {
+              "--no-optional-locks": 192,
+              "/private/var/folders/pd/bf3gnx8n4lld7xsgcfc1gvfc0000gn/T/waku-clean-l2akummx/gone-192/origin.git": 1,
+              "branch": 1,
+              "config": 1,
+              "fetch": 1,
+              "for-each-ref": 2,
+              "log": 1,
+              "merge-tree": 24,
+              "rev-list": 1,
+              "rev-parse": 5,
+              "worktree": 1
+            }
+          }
+        }
+      }
+    },
+    "behavior_checks": "candidate output, registered worktrees and refs checked every run"
+  },
+  "agent_path_comparison": {
+    "agents": 32,
+    "worktrees": 192,
+    "passes": 4,
+    "warmups": 1,
+    "baseline_ms": [
+      282.552125,
+      293.482083,
+      293.571792,
+      283.4735,
+      280.35537500000004,
+      285.5665,
+      282.40975000000003
+    ],
+    "candidate_ms": [
+      8.023583,
+      8.22875,
+      8.181000000000001,
+      8.103667,
+      8.061625,
+      8.245084,
+      8.050917
+    ],
+    "benchmark_source": "scripts/benchmark-agent-paths.rs",
+    "initialization_timed": false,
+    "median_baseline_ms": 283.4735,
+    "median_candidate_ms": 8.103667
+  },
+  "native_indicatif_feature": {
+    "default_bytes": 936512,
+    "native_only_bytes": 936512,
+    "adopted": false,
+    "reason": "No native binary size reduction; original features retained",
+    "default_sha256": "ee012d9ca61056754c3bf9279beb487bb7b5cf0c002050b0a9be081120658119",
+    "native_only_sha256": "0b492224d068bfdc086a6a364be7d0674247bf6e4f7c17c20ea81886c8b1b228"
+  },
+  "cli": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "repetitions": 31,
+    "warmups": 1,
+    "binary_bytes": {
+      "baseline": 969696,
+      "candidate": 936528
+    },
+    "binary_sha256": {
+      "baseline": "1f18857729f04b83cba83486d19c9f21e1f65af644c58a35c2cdc21a967e5636",
+      "candidate": "db3b0522a71c76722776bab5da72398b32f15a41ce7799f8e7fd6a5440648a36"
+    },
+    "results": {
+      "help": {
+        "baseline": {
+          "exit_code": 0,
+          "stdout_bytes": 632,
+          "stdout_sha256": "cf00e736c51446c3b6aa7ddc1ef7284a433e810f02088f0b2ea65a3a5daf64a6",
+          "samples_ms": [
+            7.321874960325658,
+            6.155333947390318,
+            5.115166073665023,
+            4.789875005371869,
+            4.620000021532178,
+            4.792749998159707,
+            4.550167010165751,
+            4.1951671009883285,
+            4.186457954347134,
+            4.305416950955987,
+            4.185165977105498,
+            4.060499952174723,
+            3.7733749486505985,
+            4.163332981988788,
+            3.590958076529205,
+            4.057042067870498,
+            3.2685420010238886,
+            3.591917105950415,
+            3.702749963849783,
+            3.476582933217287,
+            3.3475409727543592,
+            3.184958011843264,
+            3.247832995839417,
+            3.1492920825257897,
+            3.533042035996914,
+            2.9711249517276883,
+            3.166208043694496,
+            3.0664169462397695,
+            3.098082961514592,
+            3.046666970476508,
+            3.065750002861023
+          ],
+          "median_ms": 3.702749963849783
+        },
+        "candidate": {
+          "exit_code": 0,
+          "stdout_bytes": 632,
+          "stdout_sha256": "cf00e736c51446c3b6aa7ddc1ef7284a433e810f02088f0b2ea65a3a5daf64a6",
+          "samples_ms": [
+            8.095124969258904,
+            6.027333089150488,
+            5.274374969303608,
+            4.475582973100245,
+            4.310667049139738,
+            4.497791989706457,
+            4.52275003772229,
+            4.020708031021059,
+            4.278040956705809,
+            4.401667043566704,
+            4.425124963745475,
+            4.081582999788225,
+            3.76083399169147,
+            4.0594590827822685,
+            3.674000035971403,
+            3.7965000374242663,
+            3.245249972678721,
+            3.0596669530496,
+            3.1179579673334956,
+            3.2586660236120224,
+            3.3714580349624157,
+            3.080792026594281,
+            3.3511670771986246,
+            3.260166966356337,
+            3.243749961256981,
+            3.480082959868014,
+            3.124249982647598,
+            3.0003749998286366,
+            3.0443749856203794,
+            3.2015000469982624,
+            2.9157500248402357
+          ],
+          "median_ms": 3.674000035971403
+        }
+      },
+      "zsh": {
+        "baseline": {
+          "exit_code": 0,
+          "stdout_bytes": 9982,
+          "stdout_sha256": "d04ba15fbc4d0cc35cb229e38327de4010fe35b8233b41ddf77565516c40cfac",
+          "samples_ms": [
+            3.423291025683284,
+            3.2687910133972764,
+            2.9254580149427056,
+            3.1518329633399844,
+            3.052709042094648,
+            3.1220419332385063,
+            3.573209047317505,
+            3.250958980061114,
+            3.5151250194758177,
+            3.2902919920161366,
+            8.81958391983062,
+            7.686041062697768,
+            4.610665957443416,
+            4.084415966644883,
+            3.4369589993730187,
+            3.5021660150960088,
+            3.4545420203357935,
+            3.8016249891370535,
+            3.7717910017818213,
+            3.553875023499131,
+            3.642708994448185,
+            3.544457955285907,
+            3.0194579157978296,
+            2.9790829867124557,
+            3.142792033031583,
+            2.953041926957667,
+            3.004124970175326,
+            2.9357910389080644,
+            2.860541921108961,
+            3.079832997173071,
+            3.0074160313233733
+          ],
+          "median_ms": 3.2902919920161366
+        },
+        "candidate": {
+          "exit_code": 0,
+          "stdout_bytes": 8494,
+          "stdout_sha256": "f7d8309be281e91ee979c250e79a9fdff27f4f8b744ab3d1a02e5c25d88c6b34",
+          "samples_ms": [
+            3.484790911898017,
+            2.9373751021921635,
+            2.8187920106574893,
+            2.965416992083192,
+            3.1749169575050473,
+            2.944875042885542,
+            3.3303749514743686,
+            3.0829160241410136,
+            3.3585840137675405,
+            3.1817080453038216,
+            3.1581249786540866,
+            3.680041991174221,
+            3.5616670502349734,
+            3.2020830549299717,
+            3.615290974266827,
+            3.319915966130793,
+            3.54795902967453,
+            3.795707947574556,
+            3.8665829924866557,
+            3.5612499341368675,
+            3.1939580803737044,
+            3.0254169832915068,
+            3.1441249884665012,
+            2.9151670169085264,
+            2.836165949702263,
+            2.7597920270636678,
+            3.0254999874159694,
+            3.0879999976605177,
+            2.873542020097375,
+            2.890167059376836,
+            2.87704193033278
+          ],
+          "median_ms": 3.1581249786540866
+        }
+      },
+      "bash": {
+        "baseline": {
+          "exit_code": -6,
+          "stdout_bytes": 0,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "samples_ms": [],
+          "median_ms": null
+        },
+        "candidate": {
+          "exit_code": 0,
+          "stdout_bytes": 11326,
+          "stdout_sha256": "04ea31ee83886ec77700acb6af484522acb3fb19015b26eaa21df00b6eee80e5",
+          "samples_ms": [
+            5.551457987166941,
+            3.5628749756142497,
+            3.0816670041531324,
+            3.252500086091459,
+            3.3330420264974236,
+            3.391665988601744,
+            3.6013340577483177,
+            3.2749579986557364,
+            3.563583013601601,
+            3.4612090094015002,
+            3.2155000371858478,
+            3.184208064340055,
+            3.2292079413309693,
+            3.415041952393949,
+            2.8997500194236636,
+            3.3321670489385724,
+            3.5065419506281614,
+            3.7670410238206387,
+            3.7022499600425363,
+            3.4187500132247806,
+            3.628249978646636,
+            3.7113750586286187,
+            3.232707967981696,
+            3.0917500844225287,
+            2.9647910268977284,
+            4.055125056765974,
+            3.376708016730845,
+            3.2566250301897526,
+            3.4449580125510693,
+            3.1930420082062483,
+            3.3066669711843133
+          ],
+          "median_ms": 3.376708016730845
+        }
+      }
+    }
+  },
+  "combined": {
+    "repetitions": 7,
+    "warmups": 1,
+    "history": 0,
+    "artifact_files_per_worktree": 0,
+    "fixture_agents": 0,
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "git_version": "git version 2.56.0",
+    "binary_bytes": {
+      "baseline": 969696,
+      "candidate": 936528
+    },
+    "binary_sha256": {
+      "baseline": "1f18857729f04b83cba83486d19c9f21e1f65af644c58a35c2cdc21a967e5636",
+      "candidate": "db3b0522a71c76722776bab5da72398b32f15a41ce7799f8e7fd6a5440648a36"
+    },
+    "results": {
+      "gone_48": {
+        "baseline": {
+          "median_ms": 243.588,
+          "samples_ms": [
+            240.503,
+            246.641,
+            257.411,
+            282.242,
+            240.531,
+            234.273,
+            243.588
+          ],
+          "median_cpu_ms": 634.074,
+          "cpu_samples_ms": [
+            651.638,
+            621.516,
+            638.553,
+            651.398,
+            634.074,
+            627.452,
+            623.655
+          ],
+          "profile": {
+            "git_processes": 68,
+            "unique_count_processes": 0,
+            "batch_count_processes": 1,
+            "single_merge_processes": 0,
+            "batch_merge_processes": 6,
+            "command_counts": {
+              "--no-optional-locks": 48,
+              "/private/var/folders/pd/bf3gnx8n4lld7xsgcfc1gvfc0000gn/T/waku-clean-2yj3115h/gone-48/origin.git": 1,
+              "branch": 1,
+              "config": 1,
+              "fetch": 1,
+              "for-each-ref": 2,
+              "log": 1,
+              "merge-tree": 6,
+              "rev-list": 1,
+              "rev-parse": 5,
+              "worktree": 1
+            }
+          }
+        },
+        "candidate": {
+          "median_ms": 246.106,
+          "samples_ms": [
+            246.106,
+            269.455,
+            245.43,
+            242.724,
+            249.053,
+            231.332,
+            246.225
+          ],
+          "median_cpu_ms": 635.122,
+          "cpu_samples_ms": [
+            635.7,
+            646.483,
+            616.594,
+            603.588,
+            618.416,
+            637.344,
+            635.122
+          ],
+          "profile": {
+            "git_processes": 68,
+            "unique_count_processes": 0,
+            "batch_count_processes": 1,
+            "single_merge_processes": 0,
+            "batch_merge_processes": 6,
+            "command_counts": {
+              "--no-optional-locks": 48,
+              "/private/var/folders/pd/bf3gnx8n4lld7xsgcfc1gvfc0000gn/T/waku-clean-2yj3115h/gone-48/origin.git": 1,
+              "branch": 1,
+              "config": 1,
+              "fetch": 1,
+              "for-each-ref": 2,
+              "log": 1,
+              "merge-tree": 6,
+              "rev-list": 1,
+              "rev-parse": 5,
+              "worktree": 1
+            }
+          }
+        }
+      },
+      "gone_192": {
+        "baseline": {
+          "median_ms": 771.512,
+          "samples_ms": [
+            780.859,
+            768.013,
+            756.03,
+            741.117,
+            784.258,
+            771.512,
+            799.068
+          ],
+          "median_cpu_ms": 2172.243,
+          "cpu_samples_ms": [
+            2191.661,
+            2171.16,
+            2172.243,
+            2101.724,
+            2105.032,
+            2177.67,
+            2243.202
+          ],
+          "profile": {
+            "git_processes": 230,
+            "unique_count_processes": 0,
+            "batch_count_processes": 1,
+            "single_merge_processes": 0,
+            "batch_merge_processes": 24,
+            "command_counts": {
+              "--no-optional-locks": 192,
+              "/private/var/folders/pd/bf3gnx8n4lld7xsgcfc1gvfc0000gn/T/waku-clean-2yj3115h/gone-192/origin.git": 1,
+              "branch": 1,
+              "config": 1,
+              "fetch": 1,
+              "for-each-ref": 2,
+              "log": 1,
+              "merge-tree": 24,
+              "rev-list": 1,
+              "rev-parse": 5,
+              "worktree": 1
+            }
+          }
+        },
+        "candidate": {
+          "median_ms": 805.531,
+          "samples_ms": [
+            765.423,
+            836.498,
+            777.927,
+            759.322,
+            1001.864,
+            805.531,
+            897.517
+          ],
+          "median_cpu_ms": 2146.422,
+          "cpu_samples_ms": [
+            2146.422,
+            2264.083,
+            2214.821,
+            2122.604,
+            2039.998,
+            2140.375,
+            2235.143
+          ],
+          "profile": {
+            "git_processes": 230,
+            "unique_count_processes": 0,
+            "batch_count_processes": 1,
+            "single_merge_processes": 0,
+            "batch_merge_processes": 24,
+            "command_counts": {
+              "--no-optional-locks": 192,
+              "/private/var/folders/pd/bf3gnx8n4lld7xsgcfc1gvfc0000gn/T/waku-clean-2yj3115h/gone-192/origin.git": 1,
+              "branch": 1,
+              "config": 1,
+              "fetch": 1,
+              "for-each-ref": 2,
+              "log": 1,
+              "merge-tree": 24,
+              "rev-list": 1,
+              "rev-parse": 5,
+              "worktree": 1
+            }
+          }
+        }
+      }
+    },
+    "behavior_checks": "candidate output, registered worktrees and refs checked every run"
+  },
+  "artifacts": {
+    "repetitions": 7,
+    "warmups": 1,
+    "history": 0,
+    "artifact_files_per_worktree": 2000,
+    "fixture_agents": 0,
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "git_version": "git version 2.56.0",
+    "binary_bytes": {
+      "baseline": 969696,
+      "candidate": 936528
+    },
+    "binary_sha256": {
+      "baseline": "1f18857729f04b83cba83486d19c9f21e1f65af644c58a35c2cdc21a967e5636",
+      "candidate": "db3b0522a71c76722776bab5da72398b32f15a41ce7799f8e7fd6a5440648a36"
+    },
+    "results": {
+      "gone_24": {
+        "baseline": {
+          "median_ms": 205.386,
+          "samples_ms": [
+            214.315,
+            225.97,
+            216.635,
+            205.386,
+            202.379,
+            203.009,
+            202.824
+          ],
+          "median_cpu_ms": 556.032,
+          "cpu_samples_ms": [
+            591.301,
+            556.032,
+            529.52,
+            540.801,
+            579.363,
+            511.162,
+            579.037
+          ],
+          "profile": {
+            "git_processes": 41,
+            "unique_count_processes": 0,
+            "batch_count_processes": 1,
+            "single_merge_processes": 0,
+            "batch_merge_processes": 3,
+            "command_counts": {
+              "--no-optional-locks": 24,
+              "/private/var/folders/pd/bf3gnx8n4lld7xsgcfc1gvfc0000gn/T/waku-clean-aem0q7hl/gone-24/origin.git": 1,
+              "branch": 1,
+              "config": 1,
+              "fetch": 1,
+              "for-each-ref": 2,
+              "log": 1,
+              "merge-tree": 3,
+              "rev-list": 1,
+              "rev-parse": 5,
+              "worktree": 1
+            }
+          }
+        },
+        "candidate": {
+          "median_ms": 200.493,
+          "samples_ms": [
+            208.134,
+            197.158,
+            213.12,
+            200.493,
+            243.751,
+            198.992,
+            198.366
+          ],
+          "median_cpu_ms": 405.564,
+          "cpu_samples_ms": [
+            418.104,
+            405.564,
+            409.362,
+            386.148,
+            436.056,
+            389.077,
+            396.782
+          ],
+          "profile": {
+            "git_processes": 41,
+            "unique_count_processes": 0,
+            "batch_count_processes": 1,
+            "single_merge_processes": 0,
+            "batch_merge_processes": 3,
+            "command_counts": {
+              "--no-optional-locks": 24,
+              "/private/var/folders/pd/bf3gnx8n4lld7xsgcfc1gvfc0000gn/T/waku-clean-aem0q7hl/gone-24/origin.git": 1,
+              "branch": 1,
+              "config": 1,
+              "fetch": 1,
+              "for-each-ref": 2,
+              "log": 1,
+              "merge-tree": 3,
+              "rev-list": 1,
+              "rev-parse": 5,
+              "worktree": 1
+            }
+          }
+        }
+      }
+    },
+    "behavior_checks": "candidate output, registered worktrees and refs checked every run"
+  }
+}
