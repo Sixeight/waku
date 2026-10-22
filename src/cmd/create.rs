@@ -361,7 +361,7 @@ fn create_worktree(
                 style(branch).bold(),
             );
         }
-        return Ok(None);
+        Ok(None)
     } else {
         let base_ref = if let Some(from_ref) = from {
             from_ref.to_string()
@@ -385,7 +385,7 @@ fn create_worktree(
                 style(branch).bold(),
             );
         }
-        return Ok(Some(base_ref));
+        Ok(Some(base_ref))
     }
 }
 
