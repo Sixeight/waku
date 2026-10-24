@@ -1978,6 +1978,49 @@ fn create_worktreeinclude_preserves_tracked_files_in_selected_directories() {
 }
 
 #[test]
+fn create_worktreeinclude_selects_files_in_partially_selected_untracked_directories() {
+    for mode in ["copy", "link"] {
+        let (_tmp, repo) = setup_repo();
+        fs::write(repo.join(".gitignore"), "cache/\n*.log\n").unwrap();
+        run_git(&repo, &["add", ".gitignore"]);
+        run_git(&repo, &["commit", "-m", "add gitignore"]);
+        fs::create_dir_all(repo.join("cache/group-00")).unwrap();
+        fs::write(repo.join("cache/group-00/file-0000.dat"), "fixture").unwrap();
+        fs::write(repo.join("cache/group-00/excluded.bin"), "fixture").unwrap();
+        fs::create_dir_all(repo.join("gen")).unwrap();
+        fs::write(repo.join("gen/debug.log"), "fixture").unwrap();
+        fs::write(repo.join("gen/untracked.txt"), "fixture").unwrap();
+        fs::write(repo.join("local.txt"), "fixture").unwrap();
+        fs::write(
+            repo.join(".worktreeinclude"),
+            "cache/**/*.dat\n*.log\nlocal.txt\n",
+        )
+        .unwrap();
+        run_git(&repo, &["config", "waku.worktreeinclude", mode]);
+        let output = run_waku(&repo, &["create", "feature-wti-partial-directory"]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let wt = repo
+            .parent()
+            .unwrap()
+            .join("myrepo-worktrees/feature-wti-partial-directory");
+        for path in ["cache/group-00/file-0000.dat", "gen/debug.log"] {
+            assert!(wt.join(path).exists(), "{mode}: missing {path:?}");
+        }
+        for path in [
+            "cache/group-00/excluded.bin",
+            "gen/untracked.txt",
+            "local.txt",
+        ] {
+            assert!(!wt.join(path).exists(), "{mode}: copied excluded {path:?}");
+        }
+    }
+}
+
+#[test]
 fn create_worktreeinclude_does_not_copy_nested_git_worktrees() {
     let (_tmp, repo) = setup_repo();
     fs::write(repo.join(".gitignore"), ".claude/\n").unwrap();
