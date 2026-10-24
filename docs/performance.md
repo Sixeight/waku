@@ -27,14 +27,6 @@ Network fetch latency, editor startup, and post-create hooks are not represented
 by these fixtures. Repository size, filesystem, and other running applications
 affect the timings. Run the comparison without concurrent builds or tests.
 
-Measurements from 2026-10-22:
-
-- [Speed and binary size](performance-2026-10-22.md)
-- [Copy parallelism and directory layout](performance-copy-2026-10-22.md)
-- [Clean unique commit counts](performance-clean-2026-10-22.md)
-- [Clean squash-merge detection with merge-tree](performance-merge-2026-10-22.md)
-- [Dirty checks, agent path matching, and completion size](performance-status-2026-10-22.md)
-
 ## Results on 2026-09-22
 
 Measured on macOS 27.0 arm64 with Git 2.55.0, comparing the release build of
@@ -69,6 +61,17 @@ Focused scripts take the same `--binary LABEL=PATH` and `--output` options:
 - [`scripts/benchmark-copy.py`](../scripts/benchmark-copy.py): `create` with large copy sets
 - [`scripts/benchmark-cli.py`](../scripts/benchmark-cli.py): `--help` and shell completion output
 
+[`scripts/benchmark-agent-paths.rs`](../scripts/benchmark-agent-paths.rs) times
+agent path matching in isolation. Build it against the release dependencies:
+
+```sh
+cargo build --release
+rustc --edition=2021 -O -Clto -Cpanic=abort scripts/benchmark-agent-paths.rs \
+  --extern anyhow="$(ls target/release/deps/libanyhow-*.rlib | head -1)" \
+  -L dependency=target/release/deps -o /tmp/benchmark-agent-paths
+/tmp/benchmark-agent-paths /tmp/agent-path-fixture
+```
+
 ## Implementation
 
 Clean loads branch IDs, remote configuration, and commit display information in
@@ -90,12 +93,15 @@ branches with a deleted upstream are fetched in one batch. With several targets,
 or when the batch fails, counts are fetched per worktree.
 
 Squash-merge detection passes candidates to `git merge-tree --stdin` in batches
-of eight, running up to eight batches in parallel. If a batch fails, its
+of eight, running up to eight batches in parallel. Batches of 32 were faster
+for some 192-worktree fixtures but reduced parallelism with 48 worktrees, so
+eight is the size that helped in every measured case. If a batch fails, its
 candidates are checked one by one. A result with conflicts is never treated as
 merged.
 
 Worktree resolution and removal reuse configuration and worktree listings.
 Copy uses up to four workers and clean up to eight, capped at the CPU count.
+With 4,096 files on macOS, four copy workers had a shorter median than eight.
 When the copy source is a chain of single directories, parallelism starts where
 the tree first branches. Recursive copies within a worker run sequentially, and
 workers never spawn nested workers. Copying symlink targets and copy exclusions
