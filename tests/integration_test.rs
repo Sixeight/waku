@@ -1989,6 +1989,7 @@ fn create_worktreeinclude_selects_files_in_partially_selected_untracked_director
         fs::write(repo.join("cache/group-00/excluded.bin"), "fixture").unwrap();
         fs::create_dir_all(repo.join("gen")).unwrap();
         fs::write(repo.join("gen/debug.log"), "fixture").unwrap();
+        fs::write(repo.join("gen/line\nbreak.log"), "fixture").unwrap();
         fs::write(repo.join("gen/untracked.txt"), "fixture").unwrap();
         fs::write(repo.join("local.txt"), "fixture").unwrap();
         fs::write(
@@ -2007,7 +2008,11 @@ fn create_worktreeinclude_selects_files_in_partially_selected_untracked_director
             .parent()
             .unwrap()
             .join("myrepo-worktrees/feature-wti-partial-directory");
-        for path in ["cache/group-00/file-0000.dat", "gen/debug.log"] {
+        for path in [
+            "cache/group-00/file-0000.dat",
+            "gen/debug.log",
+            "gen/line\nbreak.log",
+        ] {
             assert!(wt.join(path).exists(), "{mode}: missing {path:?}");
         }
         for path in [

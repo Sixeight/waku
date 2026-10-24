@@ -59,7 +59,7 @@ pub fn check_ignore_in(dir: &Path, paths: &[PathBuf]) -> Result<HashSet<PathBuf>
         .stdin
         .take()
         .context("git check-ignore has no stdin")?;
-    let output = std::thread::scope(|scope| {
+    let (output, written) = std::thread::scope(|scope| {
         let writer = scope.spawn(move || -> std::io::Result<()> {
             for path in paths {
                 stdin.write_all(path.as_os_str().as_bytes())?;
@@ -68,17 +68,15 @@ pub fn check_ignore_in(dir: &Path, paths: &[PathBuf]) -> Result<HashSet<PathBuf>
             Ok(())
         });
         let output = child.wait_with_output();
-        writer
-            .join()
-            .unwrap()
-            .context("failed to write to git check-ignore")?;
-        output.context("failed to wait for git check-ignore")
-    })?;
+        (output, writer.join().unwrap())
+    });
+    let output = output.context("failed to wait for git check-ignore")?;
     // Exit status 1 means that none of the paths are ignored.
     if !matches!(output.status.code(), Some(0 | 1)) {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!("git check-ignore failed: {}", stderr.trim());
     }
+    written.context("failed to write to git check-ignore")?;
     Ok(output
         .stdout
         .split(|byte| *byte == 0)
