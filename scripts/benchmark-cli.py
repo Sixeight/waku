@@ -9,7 +9,11 @@ from pathlib import Path
 import platform
 import statistics
 import subprocess
+import sys
 import time
+
+sys.dont_write_bytecode = True
+import benchmark
 
 
 def main():
@@ -20,20 +24,14 @@ def main():
     args = parser.parse_args()
     if args.repetitions < 1:
         parser.error("repetitions must be positive")
-    binaries = {}
-    for spec in args.binary:
-        label, separator, path = spec.partition("=")
-        binary = Path(path).resolve()
-        if not separator or not label or label in binaries or not binary.is_file():
-            parser.error(f"expected unique LABEL=PATH to an existing binary: {spec}")
-        binaries[label] = binary
+    binaries = benchmark.parse_binaries(parser, args.binary)
     env = dict(os.environ, NO_COLOR="1", TERM="dumb", LC_ALL="C")
     results = {}
     for case, arguments in {"help": ["--help"], "zsh": ["completions", "zsh"],
                             "bash": ["completions", "bash"]}.items():
         samples = {label: [] for label in binaries}
         outputs = {}
-        for round_index in range(args.repetitions + 1):
+        for round_index in range(args.repetitions + benchmark.WARMUPS):
             order = list(binaries)
             offset = round_index % len(order)
             for label in order[offset:] + order[:offset]:
@@ -43,7 +41,7 @@ def main():
                 result = subprocess.run(["git-waku", *arguments], executable=binaries[label],
                                         env=env, capture_output=True)
                 elapsed = (time.perf_counter() - started) * 1000
-                if round_index and result.returncode == 0:
+                if round_index >= benchmark.WARMUPS:
                     samples[label].append(elapsed)
                 evidence = {"exit_code": result.returncode, "stdout_bytes": len(result.stdout),
                             "stdout_sha256": hashlib.sha256(result.stdout).hexdigest()}
@@ -58,10 +56,9 @@ def main():
             for label, values in samples.items()
         }
     report = {
-        "platform": platform.platform(), "repetitions": args.repetitions, "warmups": 1,
-        "binary_bytes": {label: path.stat().st_size for label, path in binaries.items()},
-        "binary_sha256": {label: hashlib.sha256(path.read_bytes()).hexdigest()
-                          for label, path in binaries.items()},
+        "platform": platform.platform(), "repetitions": args.repetitions,
+        "warmups": benchmark.WARMUPS,
+        **benchmark.binary_report(binaries),
         "results": results,
     }
     args.output.write_text(json.dumps(report, indent=2) + "\n")

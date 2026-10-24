@@ -4,9 +4,7 @@
 import argparse
 from collections import Counter
 from contextlib import ExitStack
-import hashlib
 import json
-import os
 from pathlib import Path
 import platform
 import resource
@@ -29,12 +27,7 @@ def stop_agents(processes):
 
 
 def setup_gone(parent, env, count):
-    root = benchmark.setup_repo(parent, env)
-    remote = parent / "origin.git"
-    benchmark.git(root, env, "init", "--bare", "-q", "--initial-branch=main", str(remote))
-    benchmark.git(root, env, "remote", "add", "origin", str(remote))
-    benchmark.git(root, env, "push", "-qu", "origin", "main")
-    benchmark.git(root, env, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    root = benchmark.setup_origin(parent, env)
     branches = []
     for index in range(count):
         branch = f"gone-{index:03}"
@@ -44,8 +37,7 @@ def setup_gone(parent, env, count):
         (worktree / "work.txt").write_text(f"unique content {index}\n")
         benchmark.git(worktree, env, "add", ".")
         benchmark.git(worktree, env, "commit", "-qm", branch)
-        benchmark.git(root, env, "config", f"branch.{branch}.remote", "origin")
-        benchmark.git(root, env, "config", f"branch.{branch}.merge", f"refs/heads/{branch}")
+        benchmark.track_origin(root, env, branch)
     return root, branches
 
 
@@ -65,23 +57,10 @@ def main():
     args = parser.parse_args()
     if (args.repetitions < 1 or min(args.candidates) < 3 or args.history < 0
             or args.artifact_files < 0 or args.agents < 0):
-        parser.error("repetitions must be positive, candidates at least 3, and history nonnegative")
-    binaries = {}
-    for spec in args.binary:
-        label, separator, path = spec.partition("=")
-        binary = Path(path).resolve()
-        if not separator or not label or label in binaries or not binary.is_file():
-            parser.error(f"expected unique LABEL=PATH to an existing binary: {spec}")
-        binaries[label] = binary
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    env.update({
-        "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "TERM": "dumb",
-        "NO_COLOR": "1", "CLICOLOR": "0", "CLICOLOR_FORCE": "0",
-        "COLUMNS": "240", "LINES": "60",
-        "GIT_AUTHOR_DATE": "2026-01-01T00:00:00+00:00",
-        "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+00:00",
-    })
+        parser.error("repetitions must be positive, candidates at least 3, "
+                     "and history, artifact files and agents nonnegative")
+    binaries = benchmark.parse_binaries(parser, args.binary)
+    env = benchmark.isolated_env()
     results = {}
     with tempfile.TemporaryDirectory(prefix="waku-clean-") as temporary, ExitStack() as cleanups:
         for count in args.candidates:
@@ -141,13 +120,8 @@ def main():
                     if benchmark.git(root, env, "for-each-ref", "--format=%(refname) %(objectname)") != refs:
                         raise AssertionError("dry-run changed refs")
 
-                for round_index in range(args.repetitions + 1):
-                    order = list(binaries)
-                    offset = round_index % len(order)
-                    order = order[offset:] + order[:offset]
-                    if (round_index // len(order)) % 2:
-                        order.reverse()
-                    for label in order:
+                for round_index in range(args.repetitions + benchmark.WARMUPS):
+                    for label in benchmark.round_order(binaries, round_index):
                         before = resource.getrusage(resource.RUSAGE_CHILDREN)
                         started = time.perf_counter()
                         result = benchmark.run([binaries[label], "clean", "--dry-run"], root, env)
@@ -156,7 +130,7 @@ def main():
                         verify(result)
                         if expected is None:
                             expected = result.stdout
-                        if round_index:
+                        if round_index >= benchmark.WARMUPS:
                             samples[label].append(elapsed)
                             cpu_samples[label].append(1000 * (
                                 after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime
@@ -186,8 +160,7 @@ def main():
                 name = f"{case}_{count}"
                 results[name] = {
                     label: {
-                        "median_ms": round(statistics.median(values), 3),
-                        "samples_ms": [round(value, 3) for value in values],
+                        **benchmark.summarize(values),
                         "median_cpu_ms": round(statistics.median(cpu_samples[label]), 3),
                         "cpu_samples_ms": [round(value, 3) for value in cpu_samples[label]],
                         "profile": profiles[label],
@@ -201,15 +174,13 @@ def main():
                 ), flush=True)
                 stop_agents(processes)
     report = {
-        "repetitions": args.repetitions, "warmups": 1,
+        "repetitions": args.repetitions, "warmups": benchmark.WARMUPS,
         "history": args.history,
         "artifact_files_per_worktree": args.artifact_files,
         "fixture_agents": args.agents,
         "platform": platform.platform(),
         "git_version": benchmark.run(["git", "--version"], Path.cwd(), env).stdout.strip(),
-        "binary_bytes": {label: binary.stat().st_size for label, binary in binaries.items()},
-        "binary_sha256": {label: hashlib.sha256(binary.read_bytes()).hexdigest()
-                          for label, binary in binaries.items()},
+        **benchmark.binary_report(binaries),
         "results": results,
         "behavior_checks": "candidate output, registered worktrees and refs checked every run",
     }

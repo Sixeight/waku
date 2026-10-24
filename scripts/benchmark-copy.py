@@ -2,12 +2,10 @@
 """Compare copy workloads using real Git worktrees and verify every checkout."""
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import platform
-import statistics
 import subprocess
 import sys
 import tempfile
@@ -49,21 +47,8 @@ def main():
              if not args.mode or mode in args.mode]
     if min(*args.files, args.file_bytes, args.groups, args.repetitions) < 1:
         parser.error("counts and file size must be positive")
-    binaries = {}
-    for spec in args.binary:
-        label, separator, path = spec.partition("=")
-        binary = Path(path).resolve()
-        if not separator or not label or label in binaries or not binary.is_file():
-            parser.error(f"expected unique LABEL=PATH to an existing binary: {spec}")
-        binaries[label] = binary
-
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    env.update({
-        "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "TERM": "dumb",
-        "NO_COLOR": "1", "CLICOLOR": "0", "CLICOLOR_FORCE": "0",
-        "COLUMNS": "240", "LINES": "60",
-    })
+    binaries = benchmark.parse_binaries(parser, args.binary)
+    env = benchmark.isolated_env()
     results = {}
     with tempfile.TemporaryDirectory(prefix="waku-copy-") as temporary:
         for count in args.files:
@@ -95,13 +80,8 @@ def main():
                     benchmark.git(root, env, "config", "waku.copy.include", "cache")
                 samples = {label: [] for label in binaries}
                 stages = {label: {} for label in binaries}
-                for round_index in range(args.repetitions + 1):
-                    order = list(binaries)
-                    offset = round_index % len(order)
-                    order = order[offset:] + order[:offset]
-                    if (round_index // len(order)) % 2:
-                        order.reverse()
-                    for label in order:
+                for round_index in range(args.repetitions + benchmark.WARMUPS):
+                    for label in benchmark.round_order(binaries, round_index):
                         started = time.perf_counter()
                         result = benchmark.run([binaries[label], "create", "bench"], root, env)
                         elapsed = (time.perf_counter() - started) * 1000
@@ -111,7 +91,7 @@ def main():
                             raise AssertionError("worktree is dirty")
                         if benchmark.git(worktree, env, "branch", "--show-current") != "bench":
                             raise AssertionError("wrong branch")
-                        if round_index:
+                        if round_index >= benchmark.WARMUPS:
                             samples[label].append(elapsed)
                             for line in result.stderr.splitlines():
                                 if line.startswith("PROBE "):
@@ -121,29 +101,22 @@ def main():
                         benchmark.git(root, env, "branch", "-D", "bench")
                 name = f"{mode}_{count}"
                 results[name] = {
-                    label: {
-                        "median_ms": round(statistics.median(values), 3),
-                        "samples_ms": [round(value, 3) for value in values],
-                        "stages": stages[label],
-                    } for label, values in samples.items()
+                    label: {**benchmark.summarize(values), "stages": stages[label]}
+                    for label, values in samples.items()
                 }
                 print(name + ": " + ", ".join(
                     f"{label}={value['median_ms']:.3f} ms"
                     for label, value in results[name].items()
                 ), flush=True)
     report = {
-        "repetitions": args.repetitions, "warmups": 1,
+        "repetitions": args.repetitions, "warmups": benchmark.WARMUPS,
         "files": args.files, "file_bytes": args.file_bytes, "groups": args.groups,
         "selective": args.selective,
         "modes": modes,
         "platform": platform.platform(),
         "git_version": benchmark.run(["git", "--version"], Path.cwd(), env).stdout.strip(),
         "binaries": {label: str(binary) for label, binary in binaries.items()},
-        "binary_bytes": {label: binary.stat().st_size for label, binary in binaries.items()},
-        "binary_sha256": {
-            label: hashlib.sha256(binary.read_bytes()).hexdigest()
-            for label, binary in binaries.items()
-        },
+        **benchmark.binary_report(binaries),
         "results": results,
         "behavior_checks": "file paths, content hashes, branch and status verified on every run",
     }

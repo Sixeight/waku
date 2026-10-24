@@ -2,27 +2,33 @@
 mod agents {
     include!("../src/cmd/clean/agents.rs");
 
+    const AGENTS: usize = 32;
+    const WORKTREES: usize = 192;
+    const PASSES: usize = 4;
+    const WARMUPS: usize = 1;
+    const SAMPLES: usize = 7;
+    const ROUNDS: usize = SAMPLES + WARMUPS;
+
     pub(super) fn run(root: &std::path::Path) -> anyhow::Result<()> {
-        let directories: Vec<_> = (0..32)
+        let directories: Vec<_> = (0..AGENTS)
             .map(|index| {
                 root.join("agents")
                     .join(index.to_string())
                     .join("nested/workspace")
             })
             .collect();
-        let worktrees: Vec<_> = (0..192)
+        let worktrees: Vec<_> = (0..WORKTREES)
             .map(|index| root.join("worktrees").join(index.to_string()))
             .collect();
         for path in directories.iter().chain(&worktrees) {
             std::fs::create_dir_all(path)?;
         }
         let snapshot = ActiveAgents::from_directories(directories.clone());
-        let mut baseline = Vec::new();
-        let mut candidate = Vec::new();
-        for round in 0..8 {
+        let mut samples = [Vec::new(), Vec::new()];
+        for round in 0..ROUNDS {
             for variant in if round % 2 == 0 { [0, 1] } else { [1, 0] } {
                 let started = std::time::Instant::now();
-                for _ in 0..4 {
+                for _ in 0..PASSES {
                     for worktree in &worktrees {
                         let uses = if variant == 0 {
                             let worktree = normalized(worktree);
@@ -36,16 +42,13 @@ mod agents {
                     }
                 }
                 let elapsed = started.elapsed().as_secs_f64() * 1000.0;
-                if round != 0 {
-                    if variant == 0 {
-                        baseline.push(elapsed);
-                    } else {
-                        candidate.push(elapsed);
-                    }
+                if round >= WARMUPS {
+                    samples[variant].push(elapsed);
                 }
             }
         }
-        println!("{{\"agents\":32,\"worktrees\":192,\"passes\":4,\"warmups\":1,\"baseline_ms\":{baseline:?},\"candidate_ms\":{candidate:?}}}");
+        let [baseline, candidate] = samples;
+        println!("{{\"agents\":{AGENTS},\"worktrees\":{WORKTREES},\"passes\":{PASSES},\"warmups\":{WARMUPS},\"baseline_ms\":{baseline:?},\"candidate_ms\":{candidate:?}}}");
         Ok(())
     }
 }

@@ -20,6 +20,57 @@ import subprocess
 import tempfile
 import time
 
+WARMUPS = 1
+
+
+def parse_binaries(parser, specs):
+    binaries = {}
+    for spec in specs:
+        label, separator, path = spec.partition("=")
+        binary = Path(path).resolve()
+        if not separator or not label or label in binaries or not binary.is_file():
+            parser.error(f"expected unique LABEL=PATH to an existing binary: {spec}")
+        binaries[label] = binary
+    return binaries
+
+
+def isolated_env():
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env.update({
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_AUTHOR_DATE": "2026-01-01T00:00:00+00:00",
+        "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+00:00",
+        "LC_ALL": "C", "LANG": "C", "TERM": "dumb", "NO_COLOR": "1",
+        "CLICOLOR": "0", "CLICOLOR_FORCE": "0",
+        "COLUMNS": "240", "LINES": "60",
+    })
+    return env
+
+
+def round_order(labels, round_index):
+    """Rotate the first binary each round and reverse every other full cycle."""
+    order = list(labels)
+    offset = round_index % len(order)
+    order = order[offset:] + order[:offset]
+    if (round_index // len(order)) % 2:
+        order.reverse()
+    return order
+
+
+def summarize(values):
+    return {"median_ms": round(statistics.median(values), 3),
+            "samples_ms": [round(value, 3) for value in values]}
+
+
+def binary_report(binaries):
+    return {
+        "binary_bytes": {label: binary.stat().st_size for label, binary in binaries.items()},
+        "binary_sha256": {label: hashlib.sha256(binary.read_bytes()).hexdigest()
+                          for label, binary in binaries.items()},
+    }
+
 
 def run(args, cwd, env):
     result = subprocess.run(
@@ -51,13 +102,23 @@ def setup_repo(parent, env):
     return root
 
 
-def setup_clean(parent, env, count):
+def setup_origin(parent, env):
     root = setup_repo(parent, env)
     remote = parent / "origin.git"
     git(root, env, "init", "--bare", "-q", "--initial-branch=main", str(remote))
     git(root, env, "remote", "add", "origin", str(remote))
     git(root, env, "push", "-qu", "origin", "main")
     git(root, env, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    return root
+
+
+def track_origin(root, env, branch):
+    git(root, env, "config", f"branch.{branch}.remote", "origin")
+    git(root, env, "config", f"branch.{branch}.merge", f"refs/heads/{branch}")
+
+
+def setup_clean(parent, env, count):
+    root = setup_origin(parent, env)
     base = git(root, env, "rev-parse", "HEAD")
     branches = []
     for index in range(count):
@@ -74,8 +135,7 @@ def setup_clean(parent, env, count):
             if kind == "squashed":
                 (root / name).write_text(f"content for {branch}\n")
             else:
-                git(root, env, "config", f"branch.{branch}.remote", "origin")
-                git(root, env, "config", f"branch.{branch}.merge", f"refs/heads/{branch}")
+                track_origin(root, env, branch)
     git(root, env, "add", ".")
     git(root, env, "commit", "-qm", "squash changes")
     git(root, env, "push", "-q", "origin", "main")
@@ -119,69 +179,46 @@ def main():
     args = parser.parse_args()
     if args.repetitions < 1 or args.candidates < 3 or args.files < 1:
         parser.error("repetitions/files must be positive; candidates must be at least 3")
-    binaries = []
-    for spec in args.binary:
-        label, separator, path = spec.partition("=")
-        binary = Path(path).resolve()
-        if not separator or not label or not binary.is_file():
-            parser.error(f"expected LABEL=PATH to an existing binary: {spec}")
-        if label in [entry[0] for entry in binaries]:
-            parser.error(f"duplicate label: {label}")
-        binaries.append((label, binary))
-
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    env.update({
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_TERMINAL_PROMPT": "0",
-        "GIT_AUTHOR_DATE": "2026-01-01T00:00:00+00:00",
-        "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+00:00",
-        "LC_ALL": "C", "LANG": "C", "TERM": "dumb", "NO_COLOR": "1",
-        "CLICOLOR": "0", "CLICOLOR_FORCE": "0",
-        "COLUMNS": "240", "LINES": "60",
-    })
+    binaries = parse_binaries(parser, args.binary)
+    env = isolated_env()
     results = {}
     evidence = {}
 
     def measure(name, root, command, prepare=lambda: None, verify=lambda result: None):
-        samples = {label: [] for label, _ in binaries}
+        samples = {label: [] for label in binaries}
         expected = None
         # Alternate binary order between rounds to reduce systematic cache bias.
-        for round_index in range(args.repetitions + 1):
-            order = binaries if round_index % 2 == 0 else list(reversed(binaries))
-            for label, binary in order:
+        for round_index in range(args.repetitions + WARMUPS):
+            order = list(binaries) if round_index % 2 == 0 else list(reversed(binaries))
+            for label in order:
                 prepare()
                 start = time.perf_counter()
-                result = run([binary, *command], root, env)
+                result = run([binaries[label], *command], root, env)
                 elapsed = (time.perf_counter() - start) * 1000
                 signature = verify(result)
                 if expected is None:
                     expected = signature
                 elif signature != expected:
                     raise AssertionError(f"behavior differs in {name} ({label})")
-                if round_index:
+                if round_index >= WARMUPS:
                     samples[label].append(elapsed)
-        results[name] = {
-            label: {"median_ms": round(statistics.median(values), 3),
-                    "samples_ms": [round(value, 3) for value in values]}
-            for label, values in samples.items()
-        }
+        results[name] = {label: summarize(values) for label, values in samples.items()}
         evidence[name] = "verified on every sample and warmup"
         print(name + ": " + ", ".join(
             f"{label}={data['median_ms']:.3f} ms" for label, data in results[name].items()
         ), flush=True)
 
+    def verify_text(result):
+        if not result.stdout.strip():
+            raise AssertionError("missing CLI output")
+        return result.stdout.replace(
+            f"Usage: {Path(result.args[0]).name}", "Usage: git-waku"
+        )
+
     with tempfile.TemporaryDirectory(prefix="waku-benchmark-") as temporary:
         parent = Path(temporary).resolve()
         for name, command in (("help", ["--help"]),
                               ("completions_zsh", ["completions", "zsh"])):
-            def verify_text(result):
-                if not result.stdout.strip():
-                    raise AssertionError("missing CLI output")
-                return result.stdout.replace(
-                    f"Usage: {Path(result.args[0]).name}", "Usage: git-waku"
-                )
-
             measure(name, parent, command, verify=verify_text)
         clean_root, branches = setup_clean(parent / "clean", env, args.candidates)
         initial_worktrees = git(clean_root, env, "worktree", "list", "--porcelain")
@@ -214,7 +251,7 @@ def main():
         measure(f"open_{args.candidates}", clean_root,
                 ["open", selected, "--editor=/usr/bin/true"],
                 verify=verify_open)
-        for _, binary in binaries:
+        for binary in binaries.values():
             verify_path(run([binary, "open", selected, "--editor=/bin/pwd"], clean_root, env))
         evidence[f"open_{args.candidates}"] += "; launched directory checked per binary"
 
@@ -263,15 +300,11 @@ def main():
 
     report = {
         "repetitions": args.repetitions,
-        "warmups": 1,
+        "warmups": WARMUPS,
         "candidates": args.candidates,
         "files": args.files,
-        "binaries": {label: str(binary) for label, binary in binaries},
-        "binary_bytes": {label: binary.stat().st_size for label, binary in binaries},
-        "binary_sha256": {
-            label: hashlib.sha256(binary.read_bytes()).hexdigest()
-            for label, binary in binaries
-        },
+        "binaries": {label: str(binary) for label, binary in binaries.items()},
+        **binary_report(binaries),
         "platform": platform.platform(),
         "git_version": run(["git", "--version"], Path.cwd(), env).stdout.strip(),
         "results": results,
