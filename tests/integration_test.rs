@@ -970,6 +970,27 @@ fn cli_help_shows_commands() {
 }
 
 #[test]
+fn long_help_explains_clean_and_create_behavior() {
+    let help = |args: &[&str]| {
+        let output = Command::new(git_waku_bin())
+            .args(args)
+            .output()
+            .expect("failed to run git-waku help");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+
+    let clean = help(&["clean", "--help"]);
+    assert!(clean.contains("Selected by default"), "{clean}");
+    assert!(clean.contains("running AI agent"), "{clean}");
+    assert!(clean.contains("Selector keys"), "{clean}");
+    let create = help(&["create", "--help"]);
+    assert!(create.contains("waku.create.fetch"), "{create}");
+
+    let short = help(&["clean", "-h"]);
+    assert!(!short.contains("Selector keys"), "{short}");
+}
+
+#[test]
 fn clean_removes_squash_merged_worktrees() {
     let (_tmp, repo) = setup_repo();
 

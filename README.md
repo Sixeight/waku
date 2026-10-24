@@ -2,33 +2,36 @@
 
 **waku** (枠) — a frame, a dedicated space.
 
-Each worktree is a frame for focused work: one branch, one task, one AI agent. `git-waku` sets up these frames so you can stay in flow — creating worktrees with shared dependencies, launching your editor or AI assistant, and cleaning up when the work is done.
+`git-waku` creates, opens, and cleans up Git worktrees. It shares dependencies
+with new worktrees, launches your editor or AI agent, and removes worktrees
+whose branches have been merged.
 
 ## Install
 
-Requires Rust toolchain.
+Requires a Rust toolchain.
 
 ```sh
 make install        # installs to ~/.local/bin/git-waku
 ```
 
-Once installed, Git picks it up as `git waku`.
+Git then picks it up as `git waku`.
 
 ## Usage
 
-### Create a worktree
+### Create
 
 ```sh
 git waku create my-feature
 git waku create my-feature --from origin/main   # branch from a specific ref
-git waku create my-feature --agent               # create and open with Claude Code
-git waku create my-feature --agent --no-fetch    # use cached refs and start without fetching
-git waku create my-feature --agent --fetch       # wait for origin before creating
-git waku create my-feature --editor             # create and open with Neovim
-git waku create my-feature --cd                 # create and start a shell in the worktree
+git waku create my-feature --agent              # open with Claude Code
+git waku create my-feature --editor             # open with Neovim
+git waku create my-feature --cd                 # start a shell in the worktree
+git waku create my-feature --no-fetch           # use cached refs only
+git waku create my-feature --fetch              # wait for the fetch first
 ```
 
-Worktrees are created in a sibling directory named `{repo}-worktrees/`. Slashes in branch names become dashes in directory names:
+Worktrees go in a sibling `{repo}-worktrees/` directory. Slashes in branch
+names become dashes:
 
 ```
 myrepo/
@@ -37,144 +40,85 @@ myrepo-worktrees/
   sixeight-some-branch/    # from sixeight/some-branch
 ```
 
-`--no-fetch` overrides `waku.create.fetch` for this run and uses refs already
-cached locally. Newly pushed commits and branches are not available until a
-later fetch.
+With `waku.create.fetch` enabled, `create` starts from cached refs, fetches in
+the background, and fast-forwards the new branch when it can.
 
-When `waku.create.fetch` is enabled, `create --agent` starts from cached refs
-and fetches origin in the background. A newly created branch is fast-forwarded
-from its remote base when possible. The agent may see those files change while
-it is working; if the branch cannot fast-forward, Waku leaves it untouched and
-writes the fetch result to the worktree's Git directory. Pass `--fetch` to wait
-for the fetch before creating the worktree.
-
-### Get worktree path
+### Path and open
 
 ```sh
-cd $(git waku path my-feature)
-cd $(git waku path sixeight/feature)        # by branch name
-cd $(git waku path sixeight-feature)        # by directory name
-```
-
-### Open a worktree
-
-```sh
+cd $(git waku path my-feature)              # by branch or directory name
 git waku open my-feature                    # launch Neovim
-git waku open my-feature --agent             # launch Claude Code
-git waku open my-feature --agent -- --resume # pass args through to claude
-git waku open                               # open current directory
+git waku open my-feature --agent -- --resume # pass args through to the agent
+git waku open                               # open the current directory
 ```
 
-### Remove a worktree
+### Remove
 
 ```sh
-git waku remove my-feature                      # remove worktree and delete branch
-git waku remove my-feature --keep-branch        # remove worktree, keep branch
-git waku remove my-feature --force              # remove even if dirty
+git waku remove my-feature                  # remove worktree and branch
+git waku remove my-feature --keep-branch
+git waku remove my-feature --force          # even if dirty
 ```
 
-### Clean up merged worktrees
+### Clean
 
 ```sh
 git waku clean                              # interactive selector
-git waku clean --dry-run                    # preview what would be removed
+git waku clean --dry-run
 git waku clean --yes                        # skip confirmation
 git waku clean --yes --force                # also remove dirty worktrees
 ```
 
-The candidate table separates the information needed to decide whether each worktree is safe to remove:
+Merged and squash-merged worktrees are selected by default when they are clean.
+Dirty worktrees, unchanged branches, and branches with unique commits are listed
+but left unchecked. Worktrees used by a running AI agent (Claude Code, Codex, OpenCode,
+Gemini CLI, aider, Grok CLI) cannot be selected, even with `--force`.
 
-- `REASON`: `merged`, `closed`, `detached`, or `unchanged`
-- `FILES`: `clean`, `dirty`, `active agent`, or `agent check unavailable`
-- `COMMITS`: whether the branch is merged, or how many commits are unique to the worktree
-- `UPDATED` / `SUBJECT`: the latest commit (hidden on narrow terminals to preserve the safety columns)
+In the selector, press `d` for a diff, `l` for unmerged commits, and `s` for
+status. See [docs/clean.md](docs/clean.md) or `git waku clean --help` for the
+selection rules and safety checks.
 
-`[✔]` marks worktrees selected for removal by default. Regular and squash-merged worktrees are selected when clean. Dirty worktrees, unchanged worktrees, and closed or detached worktrees with unique commits are left unchecked. If the unique commit count cannot be determined, the worktree is also left unchecked.
+### Other commands
 
-`--force` allows dirty worktrees to be removed, but does not automatically select closed or detached worktrees that still have unique commits. Branches that have not diverged from main are reported as `unchanged`; fast-forward merged branches can fall into this category and remain unchecked. Use `git waku remove` or select them explicitly when appropriate.
-
-In the selector, press `d` for a diff against the primary worktree's branch
-(including uncommitted tracked changes), `l` for commits absent from that branch
-and its upstream, or `s` for status including untracked files. Scroll with the
-arrow keys or Page Up/Down; Enter, Esc, or `q` returns to the selection.
-
-`clean` protects worktrees used by running Claude Code, Codex, OpenCode,
-Gemini CLI, aider, or Grok CLI processes, including sessions waiting for input.
-Protected worktrees cannot be selected, even with `--force`. This is a
-best-effort check of process working directories: remote sessions and desktop
-sessions whose processes run elsewhere may not be detected. If inspection
-fails, worktrees are kept and a warning is printed.
-
-Before each removal, `clean` checks for active agents again and verifies that
-the worktree's branch and HEAD have not changed since listing. A worktree
-listed as clean is also checked again for edits, unless `--force` is used.
-Dirty worktrees explicitly selected in the list can still be removed.
-
-### Passthrough
-
-Any unrecognized subcommand is forwarded to `git worktree`:
+Unrecognized subcommands are forwarded to `git worktree`, so `git waku list`
+runs `git worktree list`.
 
 ```sh
-git waku list                               # = git worktree list
-```
-
-### Shell completions
-
-```sh
-git waku completions zsh > _git-waku
-git waku completions bash
-git waku completions fish
+git waku completions zsh > _git-waku        # also bash, fish
 ```
 
 ## Configuration
 
-All configuration is done through `git config`.
+All settings use `git config`. See [docs/configuration.md](docs/configuration.md)
+for details.
 
-### Worktree location (`waku.worktrees.path`)
-
-Override where worktrees are created. Default: `{repo}-worktrees/` in the parent directory.
-
-```sh
-git config waku.worktrees.path /tmp/worktrees    # absolute path
-git config waku.worktrees.path ../worktrees       # relative to repo root
-```
-
-### Symlinks (`waku.link.include`)
-
-Share directories or files from the main worktree into new worktrees via symlinks. Useful for large dependency directories like `node_modules` or `vendor` that you don't want to duplicate.
+| Key | Description |
+| --- | --- |
+| `waku.worktrees.path` | Worktree directory, absolute or relative to the repo root |
+| `waku.link.include` | Paths symlinked from the main worktree, e.g. `node_modules` |
+| `waku.copy.include` | Paths copied from the main worktree, e.g. `.direnv` |
+| `waku.copy.exclude` | Paths skipped inside `waku.copy.include` entries |
+| `waku.worktreeinclude` | `.worktreeinclude` mode: `copy` (default), `link`, or `ignore` |
+| `waku.command.agent` | Agent command (default: `claude`) |
+| `waku.command.editor` | Editor command (default: `nvim`) |
+| `waku.hook.postCreate` | Shell commands run after `create` |
+| `waku.hook.postcreate.background` | Run hooks without waiting; output goes to `waku-post-create.log` in the worktree's Git directory |
+| `waku.create.fetch` | Fetch origin when creating |
 
 ```sh
 git config --add waku.link.include node_modules
-git config --add waku.link.include vendor
-```
-
-### Copies (`waku.copy.include`)
-
-Share files or directories as copies instead of symlinks. Useful when tools don't handle symlinks correctly. Multiple entries are copied in parallel.
-
-```sh
 git config --add waku.copy.include .direnv
-git config --add waku.copy.include Cargo.lock
+git config waku.command.agent "claude --resume"
+git config --add waku.hook.postCreate "direnv allow"
 ```
 
-Pass `--copy-from-base` to leave these paths at the new worktree's base revision
-instead of replacing them with files from the main worktree. This keeps tracked
-copy targets clean, but does not copy untracked targets such as `.direnv`.
-
-### Copy exclusions (`waku.copy.exclude`)
-
-Exclude specific files or subdirectories from being copied. Paths are relative to the repository root.
-
-```sh
-git config --add waku.copy.exclude node_modules/.cache
-git config --add waku.copy.exclude .direnv/tmp
-```
-
-This only applies to `waku.copy.include` entries. `.worktreeinclude` copies are not affected.
+`--copy-from-base` keeps copy targets at the new worktree's base revision.
+`-a="codex --model gpt-5"` overrides the agent command for one launch.
 
 ### `.worktreeinclude`
 
-Place a `.worktreeinclude` file at the repository root to automatically include gitignored files in new worktrees. Patterns are evaluated by Git using `.gitignore` syntax, including `!` negation, root-anchored paths, directory patterns, and escaping. Only gitignored, untracked paths are selected. The last matching pattern wins, subject to [Git's parent-directory rules](https://git-scm.com/docs/gitignore#_pattern_format); `!` removes a path from the selection. Directories are copied or linked as a whole only when all their contents are selected; otherwise selected files are handled individually.
+A `.worktreeinclude` file at the repository root selects gitignored files to
+bring into new worktrees. It uses `.gitignore` syntax, including `!` negation.
 
 ```
 # .worktreeinclude
@@ -183,75 +127,10 @@ node_modules/
 !.claude/worktrees/**
 ```
 
-To exclude files matched by `**/.env` inside a directory, use
-`!.claude/worktrees/**`. Negating only the directory with
-`!.claude/worktrees/` does not cancel the `.env` file pattern.
+## Performance
 
-Set the mode with `waku.worktreeinclude`:
-
-```sh
-git config waku.worktreeinclude copy        # copy files (default)
-git config waku.worktreeinclude link        # create symlinks
-git config waku.worktreeinclude ignore      # do nothing
-```
-
-### Tool commands (`waku.command.*`)
-
-Override the default commands for `--agent` and `--editor`:
-
-```sh
-git config waku.command.agent claude      # default: claude
-git config waku.command.editor nvim       # default: nvim
-git config waku.command.agent "claude --resume"
-git config waku.command.agent "claude --append \"review this branch\""
-```
-
-Pass a command with `=` to override it for one launch (`-a path` still treats
-`path` as the branch name):
-
-```sh
-git waku create my-feature -a="codex --model gpt-5"
-git waku open -a my-feature
-```
-
-### Post-create hooks (`waku.hook.postCreate`)
-
-Run shell commands after worktree creation:
-
-```sh
-git config --add waku.hook.postCreate "cp .env.example .env"
-git config --add waku.hook.postCreate "direnv allow"
-```
-
-To start the hooks without waiting for them, set `waku.hook.postcreate.background`:
-
-```sh
-git config waku.hook.postcreate.background true
-```
-
-`create` can return or launch an agent before these hooks finish. Their output
-and failures are written to `waku-post-create.log` in the new worktree's Git
-directory. Hooks remain synchronous by default.
-
-## Performance measurements
-
-[`scripts/benchmark.py`](scripts/benchmark.py) compares two release binaries using
-temporary Git repositories and a local bare remote. It checks worktree contents
-and command results alongside timings. See [the measurement notes](docs/performance.md)
-for the scenarios and results.
-
-```sh
-python3 scripts/benchmark.py \
-  --binary baseline=/tmp/git-waku-baseline \
-  --binary candidate=target/release/git-waku \
-  --output /tmp/waku-benchmark.json
-```
-
-Focused scripts take the same `--binary LABEL=PATH` and `--output` options:
-
-- [`scripts/benchmark-clean.py`](scripts/benchmark-clean.py): `clean --dry-run` with many candidates, including Git subprocess counts
-- [`scripts/benchmark-copy.py`](scripts/benchmark-copy.py): `create` with large copy sets
-- [`scripts/benchmark-cli.py`](scripts/benchmark-cli.py): `--help` and shell completion output
+See [docs/performance.md](docs/performance.md) for benchmarks and how to run
+them.
 
 ## Acknowledgements
 

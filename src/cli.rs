@@ -11,6 +11,27 @@ pub(crate) enum CompletionShell {
     Zsh,
 }
 
+const CREATE_HELP: &str = "\
+Fetching:
+  With waku.create.fetch enabled, create starts from cached refs, fetches origin
+  in the background, and fast-forwards the new branch when it can. --fetch waits
+  for the fetch instead; --no-fetch skips it.";
+
+const CLEAN_HELP: &str = "\
+Selected by default:
+  Clean worktrees whose branch is merged, squash-merged, or has no unique
+  commits. --force also selects dirty ones. Unchanged branches stay unchecked.
+  --yes removes exactly the default selection.
+
+Protection:
+  Worktrees used by a running AI agent (Claude Code, Codex, OpenCode, Gemini CLI,
+  aider, Grok CLI) cannot be selected, even with --force. Before each removal,
+  clean checks for agents again, verifies that the branch and HEAD are
+  unchanged, and, without --force, that a worktree listed as clean still is.
+
+Selector keys:
+  Space toggle   d diff   l unmerged commits   s status   Enter confirm   q quit";
+
 #[derive(Parser)]
 #[command(name = "git-waku", about = "Git worktree runner")]
 pub(crate) struct Cli {
@@ -25,7 +46,7 @@ pub(crate) struct Cli {
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// Create a new worktree with symlinks and hooks
-    #[command(alias = "new")]
+    #[command(alias = "new", after_long_help = CREATE_HELP)]
     Create {
         /// Branch name to create
         branch: String,
@@ -134,6 +155,7 @@ pub(crate) enum Command {
         shell: CompletionShell,
     },
     /// Remove merged worktrees
+    #[command(after_long_help = CLEAN_HELP)]
     Clean {
         /// Show what would be removed without removing
         #[arg(long)]
