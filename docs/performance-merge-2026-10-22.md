@@ -1,93 +1,117 @@
-# 2026-10-22 の squash-merge 判定の追加測定
+# Additional squash-merge detection measurements on 2026-10-22
 
-`clean --dry-run` の squash-merge 判定を8件ずつ一括処理する。
-192 worktree の upstream 削除済みケースは928.992 msから757.472 msへ18.5%短縮した。
-競合ありの192 worktree は975.601 msから783.745 msへ19.7%短縮した。
+`clean --dry-run` now checks squash-merge status in batches of 8.
+With 192 worktrees whose upstream is deleted, the median dropped from 928.992 ms
+to 757.472 ms (18.5%).
+With 192 conflicting worktrees, it dropped from 975.601 ms to 783.745 ms (19.7%).
 
-比較対象は [コミット数取得の一括化](performance-clean-2026-10-22.md) 後のバイナリ。
-サイズは953,152 bytesから969,696 bytesへ16,544 bytes（1.7%）増えた。
-初回の最適化前の1,399,664 bytesに対しては30.7%小さい。
-未コミットの変更を含むため、[生データ](benchmarks/2026-10-22-merge.json) の SHA-256 でバイナリを特定する。
+The baseline is the binary after [batched commit count lookup](performance-clean-2026-10-22.md).
+The binary grew from 953,152 bytes to 969,696 bytes, an increase of 16,544 bytes
+(1.7%). It is 30.7% smaller than the 1,399,664 bytes before the first
+optimization.
+The build includes uncommitted changes, so identify the binary by the SHA-256 in
+the [raw data](benchmarks/2026-10-22-merge.json).
 
-## 処理と安全性
+## Behavior and safety
 
-従来はブランチごとに `git merge-tree --write-tree` を実行していた。
-比較先ごとに未解決のブランチを8件ずつ `git merge-tree --stdin --no-messages --name-only` に渡し、最大8並列で処理する。
-比較先が複数あれば、統合済みと判定できなかったものだけ次の比較先へ渡す。
-1件だけの処理と、一括処理が失敗した場合は従来の個別判定を使う。
+Previously, `git merge-tree --write-tree` ran once per branch.
+Now, for each comparison target, unresolved branches are passed 8 at a time to
+`git merge-tree --stdin --no-messages --name-only`, with up to 8 batches running
+in parallel.
+With multiple comparison targets, only branches not yet judged as merged go to
+the next target.
+A single branch, or a failed batch, falls back to the per-branch check.
 
-一括処理の終了コードは、各マージの競合の有無を表さない。
-NUL 区切りの結果から各マージの成功状態と tree を読み、競合がなく比較先と同じ tree のものだけを統合済みとする。
-バイナリファイルの競合では tree が比較先と同じでも統合済みとはしない。
-ファイル名に改行があっても結果の境界と混同しない。
-出力の欠落、不明な状態、結果数の不一致はエラーとして個別判定へ戻す。
-標準入力への書き込みと出力の読み取りを並行し、パイプが埋まる停止を避ける。
+The exit code of a batch does not indicate whether each merge has conflicts.
+The success status and tree of each merge are read from the NUL-delimited
+output. A branch counts as merged only if it has no conflict and its tree equals
+the target's tree.
+A binary file conflict is not treated as merged, even if the tree equals the
+target's.
+A newline in a file name is not confused with a result boundary.
+Missing output, an unknown status, or a mismatched result count is an error and
+falls back to the per-branch check.
+Writing to stdin and reading the output run concurrently, which avoids a stall
+from a full pipe.
 
-## 通常の履歴
+## Normal history
 
-各バイナリ1回のウォームアップ後、順番を入れ替えて7回ずつ測った中央値。
-混在ケースは unchanged、squash-merged、upstream 削除済みを同数用意した。
-upstream 削除済みケースは各ブランチに固有コミットを1つ用意した。
-競合ケースはその分岐後、main に競合するバイナリファイルを追加し、origin/main と同期した。
+Median of 7 runs per binary, after one warmup per binary, with alternating
+order.
+The mixed case has equal numbers of unchanged, squash-merged, and
+upstream-deleted branches.
+In the upstream-deleted case, each branch has one unique commit.
+The conflict case adds a conflicting binary file to main after that divergence
+and syncs with origin/main.
 
-| ケース、worktree 数 | 変更前 | 8件ずつ | 短縮率 |
+| Case, worktrees | Before | Batches of 8 | Reduction |
 | --- | ---: | ---: | ---: |
-| 混在、48 | 247.112 ms | 224.318 ms | 9.2% |
-| upstream 削除済み、48 | 272.670 ms | 231.515 ms | 15.1% |
-| 競合あり、48 | 307.358 ms | 255.776 ms | 16.8% |
-| 混在、192 | 809.829 ms | 752.206 ms | 7.1% |
-| upstream 削除済み、192 | 928.992 ms | 757.472 ms | 18.5% |
-| 競合あり、192 | 975.601 ms | 783.745 ms | 19.7% |
+| Mixed, 48 | 247.112 ms | 224.318 ms | 9.2% |
+| Upstream deleted, 48 | 272.670 ms | 231.515 ms | 15.1% |
+| Conflict, 48 | 307.358 ms | 255.776 ms | 16.8% |
+| Mixed, 192 | 809.829 ms | 752.206 ms | 7.1% |
+| Upstream deleted, 192 | 928.992 ms | 757.472 ms | 18.5% |
+| Conflict, 192 | 975.601 ms | 783.745 ms | 19.7% |
 
-192件の upstream 削除済みケースの測定範囲は変更前903.380〜1,272.292 ms、変更後747.554〜900.570 ms。
-他のケースには範囲の重なりがあり、中央値の差はこの環境での測定結果である。
-全ケースで候補表示の完全一致、登録 worktree と参照の不変を各実行後に確認した。
-fetch はローカルの bare repository を使うため、ネットワークの待ち時間は含まない。
+For the 192-worktree upstream-deleted case, the range is 903.380–1,272.292 ms
+before and 747.554–900.570 ms after.
+The other cases have overlapping ranges, so the median differences are results
+from this environment only.
+After every run, the candidate output matched exactly, and the registered
+worktrees and refs were unchanged.
+Fetch uses a local bare repository, so network latency is not included.
 
-### 一括件数の比較
+### Comparison of batch sizes
 
-| ケース | 8件 | 32件 | 192件 |
+| Case | 8 | 32 | 192 |
 | --- | ---: | ---: | ---: |
-| 混在、48 | 224.318 ms | 242.027 ms | 247.487 ms |
-| upstream 削除済み、48 | 231.515 ms | 272.339 ms | 294.364 ms |
-| 競合あり、48 | 255.776 ms | 264.904 ms | 295.054 ms |
-| 混在、192 | 752.206 ms | 729.433 ms | 767.151 ms |
-| upstream 削除済み、192 | 757.472 ms | 740.389 ms | 838.055 ms |
-| 競合あり、192 | 783.745 ms | 789.500 ms | 838.774 ms |
+| Mixed, 48 | 224.318 ms | 242.027 ms | 247.487 ms |
+| Upstream deleted, 48 | 231.515 ms | 272.339 ms | 294.364 ms |
+| Conflict, 48 | 255.776 ms | 264.904 ms | 295.054 ms |
+| Mixed, 192 | 752.206 ms | 729.433 ms | 767.151 ms |
+| Upstream deleted, 192 | 757.472 ms | 740.389 ms | 838.055 ms |
+| Conflict, 192 | 783.745 ms | 789.500 ms | 838.774 ms |
 
-32件ずつは192件の一部ケースで速いが、48件では並列性が下がった。
-今回のケース全体で効果が出た8件ずつを採用した。すべてのリポジトリで最適となることまでは検証していない。
+Batches of 32 are faster in some 192-worktree cases, but with 48 worktrees they
+reduce parallelism.
+Batches of 8 were chosen because they were effective across all of these cases.
+Optimality for every repository has not been verified.
 
-### Git の起動回数
+### Git process launches
 
-Trace2 の開始イベントを、時間計測とは別の実行で数えた。
+Trace2 start events were counted in a separate run from the timing runs.
 
-| ケース | merge-tree 個別 → 一括 | Git 総起動回数 |
+| Case | merge-tree, per-branch → batched | Total Git launches |
 | --- | ---: | ---: |
-| 混在、48 | 32 → 4 | 95 → 67 |
-| upstream 削除済み、48 | 48 → 6 | 110 → 68 |
-| 競合あり、48 | 48 → 6 | 110 → 68 |
-| 混在、192 | 128 → 16 | 335 → 223 |
-| upstream 削除済み、192 | 192 → 24 | 398 → 230 |
-| 競合あり、192 | 192 → 24 | 398 → 230 |
+| Mixed, 48 | 32 → 4 | 95 → 67 |
+| Upstream deleted, 48 | 48 → 6 | 110 → 68 |
+| Conflict, 48 | 48 → 6 | 110 → 68 |
+| Mixed, 192 | 128 → 16 | 335 → 223 |
+| Upstream deleted, 192 | 192 → 24 | 398 → 230 |
+| Conflict, 192 | 192 → 24 | 398 → 230 |
 
-192件の upstream 削除済みケースの子プロセス CPU 時間中央値は3,161.244 msから2,141.047 msへ32.3%減った。
-CPU 時間は `RUSAGE_CHILDREN` の user と system の合計差分で、準備と検証を含まない。
+For the 192-worktree upstream-deleted case, the median child process CPU time
+dropped from 3,161.244 ms to 2,141.047 ms (32.3%).
+CPU time is the difference in the sum of user and system time from
+`RUSAGE_CHILDREN`. It excludes setup and verification.
 
-## main の履歴が長い場合
+## Long main history
 
-ブランチ作成後に main へ同じ tree を持つコミットを1万個追加し、origin/main と同期した。
-192 worktree、ウォームアップ1回と測定7回の結果。
+After the branches were created, 10,000 commits with the same tree were added to
+main, and main was synced with origin/main.
+Result for 192 worktrees, with one warmup and 7 measured runs.
 
-| 指標 | 変更前 | 8件ずつ | 削減率 |
+| Metric | Before | Batches of 8 | Reduction |
 | --- | ---: | ---: | ---: |
-| 経過時間の中央値 | 1,698.953 ms | 951.608 ms | 44.0% |
-| 子プロセス CPU 時間の中央値 | 7,718.253 ms | 2,791.464 ms | 63.8% |
+| Median elapsed time | 1,698.953 ms | 951.608 ms | 44.0% |
+| Median child process CPU time | 7,718.253 ms | 2,791.464 ms | 63.8% |
 
-経過時間の範囲は変更前1,569.158〜1,880.067 ms、変更後873.482〜1,184.105 msで重ならなかった。
-このケースでも候補表示、登録 worktree、参照の検証は全実行で通った。
+The elapsed time range was 1,569.158–1,880.067 ms before and
+873.482–1,184.105 ms after, with no overlap.
+In this case too, the checks of candidate output, registered worktrees, and refs
+passed in every run.
 
-## 再実行
+## Rerun
 
 ```sh
 python3 scripts/benchmark-clean.py \
@@ -105,12 +129,15 @@ python3 scripts/benchmark-clean.py \
   --repetitions 7 --output /tmp/waku-merge-tuning/history.json
 ```
 
-## 検証
+## Verification
 
-- RED: clean が一括判定を呼ぶテストを先に追加し、従来の個別判定で失敗することを確認した。
-- GREEN: パーサー、実 Git での結果比較、2,048件のパイプ入出力、複数比較先、競合、一括処理拒否時の個別処理を確認した。
-- `COLUMNS=240 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 cargo test -- --include-ignored`: 196件成功。
-- `cargo clippy --all-targets -- -D warnings`: 成功。
-- 変更対象の Rustfmt と `git diff --check`: 成功。リポジトリ全体には既存の書式差分があるため、無関係な整形は加えていない。
-- Git が一括処理を拒否する場合は shim で検証した。実際の古い Git バイナリでは検証していない。
-- `make install`: 成功。測定候補、release ビルド、インストール先の SHA-256 はすべて `1f18857729f04b83cba83486d19c9f21e1f65af644c58a35c2cdc21a967e5636` で一致した。
+- RED: first added a test that clean calls the batched check, and confirmed it
+  fails with the per-branch check.
+- GREEN: verified the parser, result comparison against real Git, 2,048-item
+  pipe input and output, multiple comparison targets, conflicts, and the
+  per-branch fallback when batching is rejected.
+- `COLUMNS=240 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 cargo test -- --include-ignored`: 196 passed.
+- `cargo clippy --all-targets -- -D warnings`: passed.
+- Rustfmt on the changed files and `git diff --check`: passed. The repository has existing formatting differences, so unrelated formatting was not applied.
+- A Git that rejects batching was simulated with a shim. It was not verified with an actual old Git binary.
+- `make install`: passed. The SHA-256 of the measured candidate, the release build, and the installed binary all match: `1f18857729f04b83cba83486d19c9f21e1f65af644c58a35c2cdc21a967e5636`.

@@ -1,88 +1,104 @@
-# 2026-10-22 のコピー追加測定
+# Additional copy measurements on 2026-10-22
 
-単一ディレクトリが続く構成で、コピーを含む worktree 作成を39〜55%短縮した。
-コピーの上限を8並列から4並列にし、枝分かれするディレクトリまで進んでから並列化する。
-Git 処理の上限は8並列のまま維持した。
+When a single-directory chain leads to the branching point, worktree creation
+with copying is 39-55% shorter. The copy limit is lowered from 8 to 4 parallel
+workers, and copying is parallelized only after reaching a directory that
+branches. The Git limit stays at 8 parallel workers.
 
-比較対象は [初回の最適化](performance-2026-10-22.md) でインストールした953,104 bytesのバイナリ。
-追加変更後は953,120 bytesで、サイズ増加は16 bytes。
-Git HEAD は初回の最適化を含まないため、比較対象は [生データ](benchmarks/2026-10-22-copy.json) の SHA-256 で特定する。
+The baseline is the 953,104-byte binary installed for the
+[first optimization](performance-2026-10-22.md). After this change the binary is
+953,120 bytes, an increase of 16 bytes. The Git HEAD does not include the first
+optimization, so the baseline is identified by the SHA-256 in the
+[raw data](benchmarks/2026-10-22-copy.json).
 
-## コピー処理の内訳
+## Copy time breakdown
 
-計測用の一時ビルドで処理時間を分けた。
-4,096ファイルの `.worktreeinclude` コピーでは、作成全体の中央値が572.946 ms、コピーが522.922 ms、ファイル列挙が35.003 msだった。
-列挙と worktree 作成は並行するため、各時間の合計は全体時間と一致しない。
-計測コードはインストールしたバイナリに含めていない。
+A temporary instrumented build split the time. For a 4,096-file
+`.worktreeinclude` copy, the median was 572.946 ms for the whole creation,
+522.922 ms for the copy, and 35.003 ms for file enumeration. Enumeration and
+worktree creation run concurrently, so the parts do not sum to the total. The
+instrumentation is not in the installed binary.
 
-この全件一致パターンでは、既存の処理がファイル群を `cache` ディレクトリにまとめてコピーしていた。
-親ディレクトリ作成をファイルごとに繰り返す経路とは区別して測定した。
+In this all-files-match pattern, the existing code collapsed the files into the
+single `cache` directory and copied it as a whole. This was measured separately from the path that
+repeats parent directory creation for each file.
 
-## 並列数の比較
+## Parallelism comparison
 
-16ディレクトリに256 bytesのファイルを分散し、1、2、4、8並列の比較用ビルドを各7回測定した。
-ウォームアップは各1回で、実行順を交代させた。
+Files of 256 bytes were spread over 16 directories. Comparison builds with 1, 2,
+4, and 8 parallel workers were each measured 7 times. Each had 1 warmup, and the
+run order was alternated.
 
-| 処理 | 1並列 | 2並列 | 4並列 | 8並列 |
+| Case | 1 worker | 2 workers | 4 workers | 8 workers |
 | --- | ---: | ---: | ---: | ---: |
-| include、640ファイル | 218.775 ms | 163.566 ms | 127.475 ms | 131.234 ms |
-| directory、640ファイル | 219.829 ms | 161.708 ms | 133.320 ms | 131.022 ms |
-| include、4,096ファイル | 1,204.913 ms | 692.628 ms | 490.706 ms | 547.312 ms |
-| directory、4,096ファイル | 1,158.767 ms | 688.114 ms | 479.520 ms | 569.951 ms |
+| include, 640 files | 218.775 ms | 163.566 ms | 127.475 ms | 131.234 ms |
+| directory, 640 files | 219.829 ms | 161.708 ms | 133.320 ms | 131.022 ms |
+| include, 4,096 files | 1,204.913 ms | 692.628 ms | 490.706 ms | 547.312 ms |
+| directory, 4,096 files | 1,158.767 ms | 688.114 ms | 479.520 ms | 569.951 ms |
 
-640ファイルでは4並列と8並列の差は小さかった。
-4,096ファイルでは4並列の中央値が短かったため、コピーは4並列とした。
-これは測定した macOS のローカルファイルシステムでの選択で、他のディスクや環境での最適値を保証するものではない。
+With 640 files, the difference between 4 and 8 workers was small. With 4,096
+files, the 4-worker median was shorter, so copying uses 4 workers. This choice
+was made on the local macOS filesystem that was measured. It does not guarantee
+the best value on other disks or environments.
 
-## 単一ディレクトリが続く構成
+## Single-directory chain
 
-変更前はコピー元の直下に1ディレクトリしかない場合、その中を逐次コピーしていた。
-変更後は単一ディレクトリの連続を先にたどり、枝分かれする場所で最大4ワーカーに分ける。
-各ワーカーは再帰コピーを逐次実行し、追加のワーカーを作らない。
+Before the change, when the copy source had only one directory directly under
+it, that directory was copied sequentially. After the change, the single
+directory chain is followed first, and the work is split across at most 4
+workers at the branching point. Each worker runs a recursive copy sequentially
+and does not create additional workers.
 
-実装した候補版を各7回測定した。
+The implemented candidate was measured 7 times.
 
-| 対象 | 変更前 | 変更後 | 短縮率 |
+| Case | Before | After | Reduction |
 | --- | ---: | ---: | ---: |
-| 640ファイル | 241.746 ms | 146.825 ms | 39.3% |
-| 4,096ファイル | 1,171.508 ms | 527.285 ms | 55.0% |
+| 640 files | 241.746 ms | 146.825 ms | 39.3% |
+| 4,096 files | 1,171.508 ms | 527.285 ms | 55.0% |
 
-4,096ファイルの測定範囲は変更前1,134.687〜1,331.934 ms、変更後457.731〜574.128 msで重ならなかった。
-内容、空ディレクトリ、除外指定を守るテストも追加した。
+For 4,096 files, the measured range did not overlap: 1,134.687-1,331.934 ms
+before and 457.731-574.128 ms after. Tests that preserve contents, empty
+directories, and exclusion rules were also added.
 
-## その他の構成
+## Other cases
 
-部分一致パターンは、各ディレクトリに追跡済みの `.keep` と対象外の `excluded.bin` を置いた。
-`.dat` だけをコピーし、対象外ファイルがコピーされないことも毎回検証した。
+For the partial-match pattern, each directory held a tracked `.keep` and an
+`excluded.bin` that does not match the include pattern. Only `.dat` files were
+copied, and every run also verified that non-matching files were not copied.
 
-| 対象 | 変更前 | 変更後 |
+| Case | Before | After |
 | --- | ---: | ---: |
-| 部分一致、640ファイル | 141.415 ms | 140.077 ms |
-| 部分一致、4,096ファイル | 582.815 ms | 562.817 ms |
-| 1 MiB × 64ファイル | 77.112 ms | 69.156 ms |
+| partial match, 640 files | 141.415 ms | 140.077 ms |
+| partial match, 4,096 files | 582.815 ms | 562.817 ms |
+| 1 MiB × 64 files | 77.112 ms | 69.156 ms |
 
-これらは測定範囲が重なるため、中央値の差だけで改善とは判断しない。
+The measured ranges overlap, so the median difference alone is not treated as an
+improvement.
 
-通常コマンドの比較も、最終バイナリで各7回実行した。
-16ディレクトリに分散した640ファイルの作成は、include が174.385 → 174.876 ms、directory が164.821 → 173.039 msだった。
-後者の中央値は約5%悪化したが、測定範囲は変更前124.842〜174.312 ms、変更後133.196〜224.023 msと重なる。
-`clean`、`path`、`open`、通常の作成と削除も生データに保存している。
-コピー以外の改善は確認していない。
+The regular commands were also run 7 times each with the final binary. Creating
+640 files spread over 16 directories went from 174.385 to 174.876 ms with
+include and from 164.821 to 173.039 ms with directory. The latter median is
+about 5% worse, but the measured ranges overlap: 124.842-174.312 ms before and
+133.196-224.023 ms after. `clean`, `path`, `open`, and regular create and remove
+are also stored in the raw data. No improvement outside copying was confirmed.
 
-## 測定方法と検証
+## Method and verification
 
-macOS 27.0.1 arm64、Git 2.56.0、Rust 1.99.1で測定した。
-Git の個人設定とシステム設定を除外し、すべて実際の一時リポジトリと worktree を使った。
-計測中にビルドやテストは実行していない。
-準備、片付け、動作検証は計測区間から除外した。
+Measured on macOS 27.0.1 arm64 with Git 2.56.0 and Rust 1.99.1. Git user and
+system configuration were excluded, and every run used real temporary
+repositories and worktrees. No builds or tests ran during measurement. Setup,
+cleanup, and correctness checks were excluded from the timed interval.
 
-コピー用のスクリプトは、ファイル名と内容ハッシュ、ブランチ、Git status を毎回検証する。
-ハッシュは `git hash-object --stdin-paths --no-filters` でまとめて取得する。
-欠落したファイルを高速化と誤認しないよう、候補版だけでなく基準版も同じ内容になることを確認した。
+The copy script verifies file names, content hashes, the branch, and Git status
+on every run. Hashes are collected in bulk with
+`git hash-object --stdin-paths --no-filters`. To avoid mistaking missing files
+for a speedup, both the candidate and the baseline were checked to produce the
+same contents.
 
-全183テストが成功した（unit 68、fetch 5、integration 104、dirty check 6）。
-実プロセスを検査するテストも実行し、Clippy、変更した Rust モジュールの Rustfmt、`git diff --check` が成功した。
-`make install` 後に、インストール先と測定した候補版の SHA-256 が一致することを確認した。
+All 183 tests passed (unit 68, fetch 5, integration 104, dirty check 6). Tests
+that inspect real processes were also run, and Clippy, Rustfmt on the changed
+Rust modules, and `git diff --check` passed. After `make install`, the SHA-256
+of the installed binary matched the measured candidate.
 
 ```sh
 python3 scripts/benchmark-copy.py \
@@ -98,12 +114,17 @@ python3 scripts/benchmark-copy.py \
   --repetitions 7 --output /tmp/waku-copy-selected.json
 ```
 
-## 測定中に見つかった既存の不具合
+## Existing bug found during measurement
 
-未追跡のディレクトリに `.worktreeinclude` の対象ファイルと対象外ファイルが混在すると、対象がコピーされないケースを基準版で確認した。
-`.gitignore` が `cache/`、`.worktreeinclude` が `cache/**/*.dat` で、`cache/group-00/file-0000.dat` と `cache/group-00/excluded.bin` を置くと再現する。
-`git ls-files` に `--directory --no-empty-directory` を付けた結果が空になり、収集処理がそのまま空の対象一覧を返していた。
+With the baseline, I confirmed a case where target files are not copied when an
+untracked directory mixes `.worktreeinclude` targets and non-targets. It
+reproduces with `.gitignore` containing `cache/`, `.worktreeinclude` containing
+`cache/**/*.dat`, and the files `cache/group-00/file-0000.dat` and
+`cache/group-00/excluded.bin`. `git ls-files` with
+`--directory --no-empty-directory` returned an empty result, and the collection code returned
+that empty target list as is.
 
-この不具合は今回の最適化では変更していない。
-部分一致の性能測定には追跡済みの `.keep` を置き、元からコピーが成立する条件を使った。
-この結果は、未追跡ディレクトリ内の部分一致コピーが正しく動くことの証明にはならない。
+This bug is not changed by this optimization. The partial-match measurements
+used a tracked `.keep`, a condition under which copying already works. These
+results do not prove that partial-match copying inside an untracked directory
+works correctly.

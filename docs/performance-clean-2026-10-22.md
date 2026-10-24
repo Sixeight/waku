@@ -1,90 +1,117 @@
-# 2026-10-22 の clean 追加測定
+# Additional clean measurements on 2026-10-22
 
-`clean --dry-run` の固有コミット数の取得を一括化した。
-upstream が削除された192 worktree のケースで、中央値を1,108.832 msから928.970 msへ16.2%短縮した。
-比較先の main に1万コミットを追加したケースでは、2,275.925 msから1,601.443 msへ29.6%短縮した。
+`clean --dry-run` now fetches the unique commit counts in one batch.
+With 192 worktrees whose upstream was deleted, the median fell 16.2%, from
+1,108.832 ms to 928.970 ms.
+With 10,000 commits added to the comparison target main, it fell 29.6%, from
+2,275.925 ms to 1,601.443 ms.
 
-比較対象は [コピーの追加最適化](performance-copy-2026-10-22.md) 後のバイナリ。
-サイズは953,120 bytesから953,152 bytesで、増加は32 bytesだった。
-未コミットの変更を含むため、[生データ](benchmarks/2026-10-22-clean.json) のバイナリ SHA-256 で比較対象を特定する。
+The comparison target is the binary after the
+[additional copy optimization](performance-copy-2026-10-22.md).
+The size went from 953,120 bytes to 953,152 bytes, an increase of 32 bytes.
+The build includes uncommitted changes, so the binary SHA-256 in the
+[raw data](benchmarks/2026-10-22-clean.json) identifies the comparison target.
 
-## 取得方法
+## Fetch method
 
-従来は、必要な worktree ごとに `git rev-list --count HEAD --not ...` を実行していた。
-比較先が1コミットにまとまり、upstream が削除されたブランチが複数ある場合は、`git for-each-ref` の `ahead-behind` でまとめて取得する。
+Previously, `git rev-list --count HEAD --not ...` ran for each worktree that
+needed it.
+When the comparison target is a single commit and several branches have a
+deleted upstream, the counts are now fetched together with `ahead-behind` in
+`git for-each-ref`.
 
-取得した件数はコミットIDで照合し、最初に読んだ worktree の HEAD と一致するものだけ使う。
-一致しないものは個別取得する。
-一括問い合わせはエージェント検査と並行して実行する。
+The fetched counts are matched by commit ID, and only those that match the HEAD
+read first for each worktree are used.
+Any that do not match are fetched individually.
+The batch query runs in parallel with the agent check.
 
-次の場合は従来の取得方法を使う。
+The previous fetch method is used in these cases:
 
-- main と upstream が別のコミットを指し、比較先が複数ある場合。
-- 一括取得の対象ブランチが2つ未満の場合。
-- 一括取得したコミットIDに一致しない場合。対応するブランチがない detached HEAD も含む。
-- Git が一括取得を拒否した場合や、出力を解析できない場合。
+- main and upstream point to different commits, so there are several comparison
+  targets.
+- Fewer than two branches are eligible for the batch fetch.
+- A commit ID does not match the batch result. This includes a detached HEAD
+  that has no corresponding branch.
+- Git rejects the batch fetch, or the output cannot be parsed.
 
-複数の比較先では、それらの履歴の和集合から除外して数える必要がある。
-単一の比較先に対する件数を流用しない。
-削除直前のエージェント検査、HEAD とブランチの再確認、dirty 判定は変更していない。
+With several comparison targets, commits must be counted after excluding the
+union of their histories.
+The count for a single comparison target is not reused.
+The agent check just before removal, the re-check of HEAD and branch, and the
+dirty check are unchanged.
 
-## 通常の履歴での比較
+## Comparison with normal history
 
-各バイナリ1回のウォームアップ後、7回ずつ測定した中央値。
-混在ケースは unchanged、squash-merged、upstream 削除済みを同数用意した。
-upstream 削除済みのケースは、全 worktree に未統合の固有コミットを1つ持たせた。
+Medians of 7 measurements per binary, after one warmup per binary.
+The mixed case has equal numbers of unchanged, squash-merged, and
+deleted-upstream worktrees.
+In the deleted-upstream case, every worktree has one unmerged unique commit.
 
-| ケース | 変更前 | 変更後 | 短縮率 |
+| Case | Before | After | Reduction |
 | --- | ---: | ---: | ---: |
-| 混在、48 worktree | 272.908 ms | 266.727 ms | 2.3% |
-| upstream 削除済み、48 worktree | 269.412 ms | 267.877 ms | 0.6% |
-| 混在、192 worktree | 835.262 ms | 797.183 ms | 4.6% |
-| upstream 削除済み、192 worktree | 1,108.832 ms | 928.970 ms | 16.2% |
+| Mixed, 48 worktrees | 272.908 ms | 266.727 ms | 2.3% |
+| Deleted upstream, 48 worktrees | 269.412 ms | 267.877 ms | 0.6% |
+| Mixed, 192 worktrees | 835.262 ms | 797.183 ms | 4.6% |
+| Deleted upstream, 192 worktrees | 1,108.832 ms | 928.970 ms | 16.2% |
 
-48 worktree と混在ケースは測定範囲が重なるため、小さい中央値の差だけで改善とは判断しない。
-upstream 削除済み192 worktree でも範囲は一部重なり、変更前1,032.831〜1,314.373 ms、変更後890.018〜1,085.580 msだった。
+The 48-worktree cases and the mixed case have overlapping measurement ranges,
+so the small median differences alone are not judged as improvements.
+The ranges also partly overlap for deleted upstream with 192 worktrees: 1,032.831–1,314.373 ms before and 890.018–1,085.580 ms after.
 
-Git の起動回数は、計測と別の実行で Trace2 の開始イベントを数えた。
+Git launch counts were taken by counting Trace2 start events in a run separate
+from the timing.
 
-| ケース | 個別カウント | 一括カウント | Git の総起動回数 |
+| Case | Individual counts | Batch counts | Total Git launches |
 | --- | ---: | ---: | ---: |
-| 混在、48 worktree | 16 → 0 | 0 → 1 | 110 → 95 |
-| upstream 削除済み、48 worktree | 48 → 0 | 0 → 1 | 157 → 110 |
-| 混在、192 worktree | 64 → 0 | 0 → 1 | 398 → 335 |
-| upstream 削除済み、192 worktree | 192 → 0 | 0 → 1 | 589 → 398 |
+| Mixed, 48 worktrees | 16 → 0 | 0 → 1 | 110 → 95 |
+| Deleted upstream, 48 worktrees | 48 → 0 | 0 → 1 | 157 → 110 |
+| Mixed, 192 worktrees | 64 → 0 | 0 → 1 | 398 → 335 |
+| Deleted upstream, 192 worktrees | 192 → 0 | 0 → 1 | 589 → 398 |
 
-## main の履歴が長い場合
+## Long main history
 
-ブランチの作成後に main へ同じ tree を持つコミットを1万個追加し、origin/main も同期した。
-古い分岐点と長い比較先の履歴でも、一括取得が遅くならないかを確認した。
-192 worktree、各7回の比較結果は次のとおり。
+After the branches were created, 10,000 commits with the same tree were added to
+main, and origin/main was synced.
+This checks that the batch fetch does not slow down with an old branch point and
+a long comparison history.
+The results for 192 worktrees, 7 runs each, are below.
 
-| 指標 | 変更前 | 変更後 | 削減率 |
+| Metric | Before | After | Reduction |
 | --- | ---: | ---: | ---: |
-| 経過時間の中央値 | 2,275.925 ms | 1,601.443 ms | 29.6% |
-| 子プロセス CPU 時間の中央値 | 13,142.008 ms | 7,617.827 ms | 42.0% |
+| Median elapsed time | 2,275.925 ms | 1,601.443 ms | 29.6% |
+| Median child process CPU time | 13,142.008 ms | 7,617.827 ms | 42.0% |
 
-経過時間の測定範囲は変更前2,178.608〜2,386.669 ms、変更後1,528.300〜1,686.415 msで重ならなかった。
-CPU 時間は `RUSAGE_CHILDREN` の user と system の差分で、準備と検証は含まない。
-複数の子プロセスを合計するため、経過時間より大きくなる。
+The elapsed time ranges did not overlap: 2,178.608–2,386.669 ms before and 1,528.300–1,686.415 ms after.
+CPU time is the difference in user and system time from `RUSAGE_CHILDREN`, and
+excludes setup and verification.
+It sums several child processes, so it exceeds the elapsed time.
 
-## 検証と再現
+## Verification and reproduction
 
-macOS 27.0.1 arm64、Git 2.56.0、Rust 1.99.1で測定した。
-すべて一時リポジトリとローカルの bare remote を使い、外部ネットワークの待ち時間は含めない。
-Git の個人設定とシステム設定を除外し、端末サイズを240列、60行に固定した。
-実行順を交代させ、計測中にはビルドやテストを行っていない。
+Measured on macOS 27.0.1 arm64, Git 2.56.0, and Rust 1.99.1.
+All runs used temporary repositories and a local bare remote, so external
+network latency is not included.
+Personal and system Git configuration were excluded, and the terminal size was
+fixed at 240 columns by 60 rows.
+The run order was alternated, and no builds or tests ran during measurement.
 
-毎回、候補一覧の表示が基準版と一致し、登録済み worktree と refs が変わらないことを確認した。
-準備、動作検証、Trace2 による起動回数の計測は時間の集計から除外した。
+Every run confirmed that the candidate list output matched the baseline and
+that the registered worktrees and refs were unchanged.
+Setup, behavior checks, and launch counting with Trace2 are excluded from the
+timing totals.
 
-全188テストが成功した（unit 69、clean 4、fetch 5、integration 104、dirty check 6）。
-単一比較先、一括問い合わせの拒否、比較先の分岐、detached HEAD のテストを追加した。
-実プロセスを検査する既存テストも実行し、Clippy、変更した Rust モジュールの Rustfmt、`git diff --check` が成功した。
-`make install` 後、測定した候補版とインストール先の SHA-256 が一致することを確認した。
+All 188 tests passed (unit 69, clean 4, fetch 5, integration 104, dirty check
+6).
+Tests were added for a single comparison target, rejection of the batch query,
+divergent comparison targets, and detached HEAD.
+Existing tests that inspect real processes also ran, and Clippy, Rustfmt on the
+changed Rust modules, and `git diff --check` passed.
+After `make install`, the SHA-256 of the measured candidate matched the
+installed binary.
 
-非対応の Git への切り替えは、一括問い合わせだけを拒否し、他の処理を実際の Git に渡す shim で検証した。
-古い Git バージョンそのものは実行していない。
+The fallback for an unsupported Git was verified with a shim that rejects only
+the batch query and passes everything else to the real Git.
+An old Git version itself was not run.
 
 ```sh
 python3 scripts/benchmark-clean.py \
@@ -100,4 +127,5 @@ python3 scripts/benchmark-clean.py \
   --output /tmp/waku-clean-history.json
 ```
 
-エージェント保護の検証には、`ps` と `lsof` で実プロセスを検査できる権限が必要。
+Verifying agent protection requires permission to inspect real processes with
+`ps` and `lsof`.
