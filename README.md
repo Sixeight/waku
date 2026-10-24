@@ -6,13 +6,39 @@ Each worktree is a frame for focused work: one branch, one task, one AI agent. `
 
 ## Install
 
-Requires Rust toolchain.
+Git discovers an executable named `git-waku` on your `PATH` as `git waku`. Check the install with `git waku --version`.
+
+### GitHub Release
+
+Download the archive and the matching `.sha256` file for your OS and CPU from [GitHub Releases](https://github.com/Sixeight/waku/releases):
+
+| OS | CPU | Archive |
+| --- | --- | --- |
+| Linux | x86_64 | `git-waku-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux | arm64 | `git-waku-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS | Apple Silicon | `git-waku-aarch64-apple-darwin.tar.gz` |
+| macOS | Intel | `git-waku-x86_64-apple-darwin.tar.gz` |
+
+Verify the archive, extract it, and put `git-waku` on your `PATH`. Linux example for x86_64:
 
 ```sh
-make install        # installs to ~/.local/bin/git-waku
+sha256sum -c git-waku-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar xzf git-waku-x86_64-unknown-linux-gnu.tar.gz
+install -m 755 git-waku-x86_64-unknown-linux-gnu/git-waku ~/.local/bin/git-waku
+git waku --version
 ```
 
-Once installed, Git picks it up as `git waku`.
+On macOS, verify with `shasum -a 256 -c` instead of `sha256sum -c`. `~/.local/bin` must be on your `PATH`.
+
+Each archive has a leading directory named after the target. The binary inside is `git-waku`.
+
+### From source
+
+```sh
+cargo install --git https://github.com/Sixeight/waku --locked
+```
+
+This needs Rust 1.85 or later. `cargo` puts `git-waku` in `~/.cargo/bin`.
 
 ## Usage
 
