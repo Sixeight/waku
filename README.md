@@ -30,6 +30,13 @@ git waku create my-feature --cd                 # create and start a shell in th
 
 Worktrees are created in a sibling directory named `{repo}-worktrees/`. Slashes in branch names become dashes in directory names:
 
+```
+myrepo/
+myrepo-worktrees/
+  my-feature/
+  sixeight-some-branch/    # from sixeight/some-branch
+```
+
 `--no-fetch` overrides `waku.create.fetch` for this run and uses refs already
 cached locally. Newly pushed commits and branches are not available until a
 later fetch.
@@ -40,13 +47,6 @@ from its remote base when possible. The agent may see those files change while
 it is working; if the branch cannot fast-forward, Waku leaves it untouched and
 writes the fetch result to the worktree's Git directory. Pass `--fetch` to wait
 for the fetch before creating the worktree.
-
-```
-myrepo/
-myrepo-worktrees/
-  my-feature/
-  sixeight-some-branch/    # from sixeight/some-branch
-```
 
 ### Get worktree path
 
@@ -246,6 +246,12 @@ python3 scripts/benchmark.py \
   --binary candidate=target/release/git-waku \
   --output /tmp/waku-benchmark.json
 ```
+
+Focused scripts take the same `--binary LABEL=PATH` and `--output` options:
+
+- [`scripts/benchmark-clean.py`](scripts/benchmark-clean.py): `clean --dry-run` with many candidates, including Git subprocess counts
+- [`scripts/benchmark-copy.py`](scripts/benchmark-copy.py): `create` with large copy sets
+- [`scripts/benchmark-cli.py`](scripts/benchmark-cli.py): `--help` and shell completion output
 
 ## Acknowledgements
 
