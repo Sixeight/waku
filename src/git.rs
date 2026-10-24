@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -35,6 +35,54 @@ pub fn git_output_raw_in(dir: &Path, args: &[&str]) -> Result<Vec<u8>> {
         bail!("git {} failed: {}", args.join(" "), stderr.trim());
     }
     Ok(output.stdout)
+}
+
+/// Return the subset of `paths` that the repository's ignore rules exclude.
+pub fn check_ignore_in(dir: &Path, paths: &[PathBuf]) -> Result<HashSet<PathBuf>> {
+    use std::ffi::OsString;
+    use std::io::Write;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    use std::process::Stdio;
+
+    if paths.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let mut child = Command::new("git")
+        .args(["check-ignore", "-z", "--stdin"])
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to execute: git check-ignore")?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("git check-ignore has no stdin")?;
+    let (output, written) = std::thread::scope(|scope| {
+        let writer = scope.spawn(move || -> std::io::Result<()> {
+            for path in paths {
+                stdin.write_all(path.as_os_str().as_bytes())?;
+                stdin.write_all(b"\0")?;
+            }
+            Ok(())
+        });
+        let output = child.wait_with_output();
+        (output, writer.join().unwrap())
+    });
+    let output = output.context("failed to wait for git check-ignore")?;
+    // Exit status 1 means that none of the paths are ignored.
+    if !matches!(output.status.code(), Some(0 | 1)) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git check-ignore failed: {}", stderr.trim());
+    }
+    written.context("failed to write to git check-ignore")?;
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| PathBuf::from(OsString::from_vec(path.to_vec())))
+        .collect())
 }
 
 /// Run a git command with a specific working directory and ignore stdout.
