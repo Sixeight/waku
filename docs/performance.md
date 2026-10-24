@@ -61,6 +61,12 @@ python3 scripts/benchmark.py \
   --repetitions 9 --output /tmp/waku-benchmark.json
 ```
 
+Focused scripts take the same `--binary LABEL=PATH` and `--output` options:
+
+- [`scripts/benchmark-clean.py`](../scripts/benchmark-clean.py): `clean --dry-run` with many candidates, including Git subprocess counts
+- [`scripts/benchmark-copy.py`](../scripts/benchmark-copy.py): `create` with large copy sets
+- [`scripts/benchmark-cli.py`](../scripts/benchmark-cli.py): `--help` and shell completion output
+
 ## Implementation
 
 Clean loads branch IDs, remote configuration, and commit display information in
