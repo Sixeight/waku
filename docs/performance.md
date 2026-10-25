@@ -72,6 +72,82 @@ rustc --edition=2021 -O -Clto -Cpanic=abort scripts/benchmark-agent-paths.rs \
 /tmp/benchmark-agent-paths /tmp/agent-path-fixture
 ```
 
+## Comparison with other worktree tools
+
+`git waku create` returns before the fetch finishes and still gives an
+up-to-date branch, and it checks out large repositories about twice as fast as
+the other tools measured. On small fixtures, waku is tied with the fastest
+tools.
+
+### Results on 2026-10-25
+
+Measured on Linux 7.2.8 (btrfs on NVMe, 24 cores) with Git 2.56.0. Medians in
+ms; min–max in parentheses where shown. 15 samples per scenario; 7 for `heavy`
+and 10 for `real`. The JSON report has every sample.
+
+| Tool | plain | copy | link | heavy | fetch | real |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| waku | 8.6 | 15.7 | 8.9 | 56.4 | 12.8 (11.7–13.6), fresh after fetch | 106.7 (101.0–135.1), fresh after fetch |
+| waku `--fetch` | | | | | 318.6, fresh | 642.5, fresh |
+| worktrunk 0.81.0 | 17.6 | 45.3 | | 84.0 | 19.5, stale | 237.1, stale |
+| gtr 2.11.1 | 104.6 | 120.7 | | 172.9 | 414.7, fresh | 908.5, fresh |
+| git-wt 0.30.0 | 33.3 | 49.4 | 36.8 | 141.8 | 33.9, stale | 248.0, stale |
+| gwq 0.1.2 | 8.5 | 24.0 | | 113.4 | | 224.2, stale |
+| wtp 2.10.3 | 8.1 | 19.4 | 8.2 | 98.4 | 8.6, stale | 222.6, stale |
+| rabi 7.0.0 | 52.3 | 67.5 | | 142.6 | 53.8, stale | 1121.1, stale |
+| workz 0.11.0 | 8.3 | 21.5 | 8.3 | 79.9 | 9.0, stale | 226.8, stale |
+
+- `plain`: a 22-file repository, no file sharing.
+- `copy`: 640 small gitignored files in `node_modules/`, copied.
+- `link`: the same `node_modules/`, symlinked. Blank cells are tools without
+  symlink support.
+- `heavy`: about 5,000 files and 200 MB in `node_modules/`, copied. btrfs clones
+  file data, so this mostly measures file count.
+- `fetch`: the origin answers after 300 ms and has one commit the clone lacks.
+- `real`: [django](https://github.com/django/django) (about 7,000 tracked
+  files), rewound 20 commits and fetching from GitHub.
+
+"Fresh" means the new worktree contains the remote commit. waku with
+`waku.create.fetch` returns with the cached base and fast-forwards when the
+background fetch lands; this happened within the settle time in every sample.
+gtr and `waku --fetch` wait for the fetch. The other tools do not fetch on
+create. In `real`, waku is faster because it runs `git worktree add` with
+`checkout.workers=8`.
+
+Each sample uses a fresh HOME and fixture, runs one untimed warmup, and times
+one create until the tool process exits. Every sample verifies that the
+worktree is registered, fully checked out, on the expected commit, and that
+`node_modules/` has the expected type and file count. Tool order rotates each
+round.
+
+Notes:
+
+- worktrunk copies through a `pre-start` hook, which blocks until the copy is
+  done. Its documented `post-start` hook returns earlier while copying
+  continues in the background.
+- gwq builds worktree paths from the origin URL, so the fixture's local origin
+  URL is replaced. It is excluded from `fetch`.
+- waku, gtr, and git-wt run as Git subcommands, which adds about 1 ms.
+- macOS (APFS) has not been measured yet.
+
+Reproduce with the tools on `PATH`; missing tools are skipped:
+
+```sh
+cargo install worktrunk workz
+cargo install --git https://github.com/yoiailabs/rabi
+go install github.com/k1LoW/git-wt@latest
+go install github.com/d-kuro/gwq/cmd/gwq@latest
+go install github.com/satococoa/wtp/v2/cmd/wtp@latest
+git clone https://github.com/coderabbitai/git-worktree-runner  # add its bin/ to PATH
+
+cargo build --release
+python3 scripts/benchmark-worktree-tools.py --work-dir ~/.cache/waku-tools-benchmark \
+  --output /tmp/waku-tools.json
+```
+
+Use `--work-dir` on the filesystem you want to measure; the system temporary
+directory may be tmpfs. `--scenarios` and `--tools` select a subset.
+
 ## Implementation
 
 Clean loads branch IDs, remote configuration, and commit display information in

@@ -129,8 +129,12 @@ node_modules/
 
 ## Performance
 
-See [docs/performance.md](docs/performance.md) for benchmarks and how to run
-them.
+With `waku.create.fetch`, `create` does not wait for the network: it starts
+from cached refs and fast-forwards when the background fetch lands. On a 7,000-file repository it
+checks out about twice as fast as other worktree tools.
+
+See [docs/performance.md](docs/performance.md) for benchmarks, a comparison
+with other worktree tools, and how to run them.
 
 ## Acknowledgements
 
