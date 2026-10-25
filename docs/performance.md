@@ -74,28 +74,29 @@ rustc --edition=2021 -O -Clto -Cpanic=abort scripts/benchmark-agent-paths.rs \
 
 ## Comparison with other worktree tools
 
-`git waku create` returns before the fetch finishes and still gives an
-up-to-date branch, and it checks out large repositories about twice as fast as
-the other tools measured. On small fixtures, waku is tied with the fastest
-tools.
+With `waku.create.fetch`, `git waku create` returns before the fetch finishes
+and still ends up on the fetched commit. On a 7,000-file repository it checks
+out about twice as fast as the other tools measured. On small fixtures, waku is
+tied with the fastest tools, and with copied files it was 1.1–1.5x faster than
+the next tool.
 
 ### Results on 2026-10-25
 
 Measured on Linux 7.2.8 (btrfs on NVMe, 24 cores) with Git 2.56.0. Medians in
-ms; min–max in parentheses where shown. 15 samples per scenario; 7 for `heavy`
-and 10 for `real`. The JSON report has every sample.
+ms. 15 samples per scenario; 7 for `heavy` and 10 for `real`. The JSON report
+has every sample and the min–max.
 
 | Tool | plain | copy | link | heavy | fetch | real |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| waku | 8.6 | 15.7 | 8.9 | 56.4 | 12.8 (11.7–13.6), fresh after fetch | 106.7 (101.0–135.1), fresh after fetch |
-| waku `--fetch` | | | | | 318.6, fresh | 642.5, fresh |
-| worktrunk 0.81.0 | 17.6 | 45.3 | | 84.0 | 19.5, stale | 237.1, stale |
-| gtr 2.11.1 | 104.6 | 120.7 | | 172.9 | 414.7, fresh | 908.5, fresh |
-| git-wt 0.30.0 | 33.3 | 49.4 | 36.8 | 141.8 | 33.9, stale | 248.0, stale |
-| gwq 0.1.2 | 8.5 | 24.0 | | 113.4 | | 224.2, stale |
-| wtp 2.10.3 | 8.1 | 19.4 | 8.2 | 98.4 | 8.6, stale | 222.6, stale |
-| rabi 7.0.0 | 52.3 | 67.5 | | 142.6 | 53.8, stale | 1121.1, stale |
-| workz 0.11.0 | 8.3 | 21.5 | 8.3 | 79.9 | 9.0, stale | 226.8, stale |
+| waku | 8.5 | 15.9 | 8.7 | 52.4 | 12.9, fresh after fetch | 108.4, fresh after fetch |
+| waku `--fetch` | | | | | 318.3, fresh | 694.8, fresh |
+| worktrunk 0.81.0 | 18.2 | 47.5 | | 81.6 | 19.7, stale | 234.4, stale |
+| gtr 2.11.1 | 104.6 | 117.7 | | 171.4 | 414.8, fresh | 907.2, fresh |
+| git-wt 0.30.0 | 35.0 | 48.0 | 36.3 | 130.6 | 35.9, stale | 281.0, stale |
+| gwq 0.1.2 | 8.1 | 22.7 | | 105.7 | | 224.9, stale |
+| wtp 2.10.3 | 7.7 | 19.8 | 8.2 | 99.4 | 8.4, stale | 223.2, stale |
+| rabi 7.0.0 | 52.0 | 64.8 | | 145.4 | 53.8, stale | 1050.8, stale |
+| workz 0.11.0 | 8.2 | 17.3 | 8.4 | 78.0 | 8.9, stale | 223.2, stale |
 
 - `plain`: a 22-file repository, no file sharing.
 - `copy`: 640 small gitignored files in `node_modules/`, copied.
@@ -105,7 +106,8 @@ and 10 for `real`. The JSON report has every sample.
   file data, so this mostly measures file count.
 - `fetch`: the origin answers after 300 ms and has one commit the clone lacks.
 - `real`: [django](https://github.com/django/django) (about 7,000 tracked
-  files), rewound 20 commits and fetching from GitHub.
+  files). The clone holds objects only up to 20 commits before the tip, so a
+  fetch downloads them from GitHub.
 
 "Fresh" means the new worktree contains the remote commit. waku with
 `waku.create.fetch` returns with the cached base and fast-forwards when the
