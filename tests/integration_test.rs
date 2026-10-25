@@ -298,7 +298,10 @@ fn create_creates_worktree() {
 
     let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-test");
     assert!(wt_path.exists(), "worktree directory should exist");
-    assert!(wt_path.join("README.md").exists(), "README.md should exist in worktree");
+    assert!(
+        wt_path.join("README.md").exists(),
+        "README.md should exist in worktree"
+    );
 }
 
 #[test]
@@ -322,7 +325,10 @@ fn create_cd_starts_shell_in_worktree() {
         .unwrap()
         .join("myrepo-worktrees/feature-cd-shell");
     let actual = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
-    assert_eq!(actual.canonicalize().unwrap(), expected.canonicalize().unwrap());
+    assert_eq!(
+        actual.canonicalize().unwrap(),
+        expected.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -357,7 +363,10 @@ fn create_idempotent_still_creates_symlinks() {
     run_waku(&repo, &["create", "feature-idem-link"]);
 
     // Delete the symlink to simulate missing link
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-idem-link");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-idem-link");
     let link = wt_path.join("node_modules");
     if link.is_symlink() {
         fs::remove_file(&link).unwrap();
@@ -370,7 +379,10 @@ fn create_idempotent_still_creates_symlinks() {
         "idempotent new failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(link.is_symlink(), "symlink should be recreated on second run");
+    assert!(
+        link.is_symlink(),
+        "symlink should be recreated on second run"
+    );
 }
 
 #[test]
@@ -436,7 +448,10 @@ fn create_returns_before_background_post_create_hook_finishes() {
             "while [ ! -f .hook-go ]; do sleep 0.05; done; touch .hook-ran",
         ],
     );
-    run_git(&repo, &["config", "waku.hook.postcreate.background", "true"]);
+    run_git(
+        &repo,
+        &["config", "waku.hook.postcreate.background", "true"],
+    );
 
     let mut child = Command::new(git_waku_bin())
         .args(["create", "feature-background-hook", "--no-fetch"])
@@ -488,9 +503,16 @@ fn create_quiet_suppresses_hook_output() {
             ..Default::default()
         },
     );
-    assert!(result.is_ok(), "create with quiet failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "create with quiet failed: {:?}",
+        result.err()
+    );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-quiet-hook");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-quiet-hook");
     assert!(wt_path.exists(), "worktree should be created");
 }
 
@@ -509,7 +531,9 @@ fn create_with_from_ref() {
         .current_dir(&repo)
         .output()
         .unwrap();
-    let hash = String::from_utf8_lossy(&first_hash.stdout).trim().to_string();
+    let hash = String::from_utf8_lossy(&first_hash.stdout)
+        .trim()
+        .to_string();
 
     let output = run_waku(&repo, &["create", "feature-from", "--from", &hash]);
     assert!(
@@ -542,7 +566,10 @@ fn create_replaces_slash_in_branch_name() {
         .parent()
         .unwrap()
         .join("myrepo-worktrees/feature-nested-branch");
-    assert!(wt_path.exists(), "worktree with slash-replaced name should exist");
+    assert!(
+        wt_path.exists(),
+        "worktree with slash-replaced name should exist"
+    );
 }
 
 #[test]
@@ -586,7 +613,10 @@ fn create_overwrites_existing_link_target() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-overwrite");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-overwrite");
     let target = wt_path.join("mylink");
     assert!(target.is_symlink(), "mylink should be a symlink");
     assert!(
@@ -614,7 +644,10 @@ fn create_overwrites_tracked_file_with_symlink_to_file() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-file-overwrite");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-file-overwrite");
     let target = wt_path.join("shared.lock");
     assert!(target.is_symlink(), "shared.lock should be a symlink");
     assert_eq!(
@@ -645,7 +678,10 @@ fn create_overwrites_tracked_directory_with_symlink() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-dir-overwrite");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-dir-overwrite");
     let target = wt_path.join("config");
     assert!(target.is_symlink(), "config should be a symlink");
     assert!(
@@ -669,7 +705,10 @@ fn create_handles_multiple_link_includes() {
     fs::write(repo.join("vendor/marker"), "v").unwrap();
 
     // Configure multiple link includes
-    run_git(&repo, &["config", "--add", "waku.link.include", "node_modules"]);
+    run_git(
+        &repo,
+        &["config", "--add", "waku.link.include", "node_modules"],
+    );
     run_git(&repo, &["config", "--add", "waku.link.include", "vendor"]);
 
     let output = run_waku(&repo, &["create", "feature-multi-link"]);
@@ -679,12 +718,19 @@ fn create_handles_multiple_link_includes() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-multi-link");
-    assert!(wt_path.join("node_modules").is_symlink(), "node_modules should be a symlink");
-    assert!(wt_path.join("vendor").is_symlink(), "vendor should be a symlink");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-multi-link");
+    assert!(
+        wt_path.join("node_modules").is_symlink(),
+        "node_modules should be a symlink"
+    );
+    assert!(
+        wt_path.join("vendor").is_symlink(),
+        "vendor should be a symlink"
+    );
 }
-
-
 
 #[test]
 fn clean_removes_merged_worktrees() {
@@ -692,7 +738,10 @@ fn clean_removes_merged_worktrees() {
 
     // Create a worktree, add a commit, then merge it to main with --no-ff
     run_waku(&repo, &["create", "feature-merged"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-merged");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-merged");
     fs::write(wt_path.join("feature.txt"), "feature\n").unwrap();
     run_git(&wt_path, &["add", "."]);
     run_git(&wt_path, &["commit", "-m", "add feature"]);
@@ -772,14 +821,20 @@ fn clean_dry_run_shows_dirty_worktrees() {
 
     // Create two worktrees, merge both
     run_waku(&repo, &["create", "feature-dry-clean"]);
-    let clean_path = repo.parent().unwrap().join("myrepo-worktrees/feature-dry-clean");
+    let clean_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-dry-clean");
     fs::write(clean_path.join("f.txt"), "f\n").unwrap();
     run_git(&clean_path, &["add", "."]);
     run_git(&clean_path, &["commit", "-m", "add f"]);
     run_git(&repo, &["merge", "--no-ff", "feature-dry-clean"]);
 
     run_waku(&repo, &["create", "feature-dry-dirty"]);
-    let dirty_path = repo.parent().unwrap().join("myrepo-worktrees/feature-dry-dirty");
+    let dirty_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-dry-dirty");
     fs::write(dirty_path.join("g.txt"), "g\n").unwrap();
     run_git(&dirty_path, &["add", "."]);
     run_git(&dirty_path, &["commit", "-m", "add g"]);
@@ -802,9 +857,7 @@ fn clean_dry_run_shows_dirty_worktrees() {
     );
     assert!(
         stdout.lines().any(|line| {
-            line.contains("feature-dry-dirty")
-                && line.contains("merged")
-                && line.contains("dirty")
+            line.contains("feature-dry-dirty") && line.contains("merged") && line.contains("dirty")
         }),
         "should mark dirty worktree with commit info: {stdout}"
     );
@@ -895,7 +948,10 @@ fn path_by_branch_name() {
 
     let result = waku_path(&repo, "feature-cd");
     let expected = repo.parent().unwrap().join("myrepo-worktrees/feature-cd");
-    assert_eq!(result.canonicalize().unwrap(), expected.canonicalize().unwrap());
+    assert_eq!(
+        result.canonicalize().unwrap(),
+        expected.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -904,8 +960,14 @@ fn path_by_branch_name_with_slash() {
     run_waku(&repo, &["create", "sixeight/feature-cd"]);
 
     let result = waku_path(&repo, "sixeight/feature-cd");
-    let expected = repo.parent().unwrap().join("myrepo-worktrees/sixeight-feature-cd");
-    assert_eq!(result.canonicalize().unwrap(), expected.canonicalize().unwrap());
+    let expected = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/sixeight-feature-cd");
+    assert_eq!(
+        result.canonicalize().unwrap(),
+        expected.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -914,8 +976,14 @@ fn path_by_worktree_dir_name() {
     run_waku(&repo, &["create", "sixeight/feature-dir"]);
 
     let result = waku_path(&repo, "sixeight-feature-dir");
-    let expected = repo.parent().unwrap().join("myrepo-worktrees/sixeight-feature-dir");
-    assert_eq!(result.canonicalize().unwrap(), expected.canonicalize().unwrap());
+    let expected = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/sixeight-feature-dir");
+    assert_eq!(
+        result.canonicalize().unwrap(),
+        expected.canonicalize().unwrap()
+    );
 }
 
 #[test]
@@ -996,7 +1064,10 @@ fn clean_removes_squash_merged_worktrees() {
 
     // Create worktree and add a commit
     run_waku(&repo, &["create", "feature-squash"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-squash");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-squash");
     fs::write(wt_path.join("feature.txt"), "feature\n").unwrap();
     run_git(&wt_path, &["add", "."]);
     run_git(&wt_path, &["commit", "-m", "add feature"]);
@@ -1052,7 +1123,10 @@ fn clean_deletes_branches_for_multiple_merged_worktrees() {
 
     for i in 1..=5 {
         let name = format!("feature-branch-del-{i}");
-        assert!(!base.join(&name).exists(), "worktree {name} should be removed");
+        assert!(
+            !base.join(&name).exists(),
+            "worktree {name} should be removed"
+        );
         let branch_check = Command::new("git")
             .args(["rev-parse", "--verify", &format!("refs/heads/{name}")])
             .current_dir(&repo)
@@ -1110,9 +1184,18 @@ fn clean_does_not_remove_multiple_undiverged() {
     assert!(output.status.success());
 
     let base = repo.parent().unwrap().join("myrepo-worktrees");
-    assert!(base.join("feature-multi-1").exists(), "undiverged worktree 1 should NOT be removed");
-    assert!(base.join("feature-multi-2").exists(), "undiverged worktree 2 should NOT be removed");
-    assert!(base.join("feature-multi-3").exists(), "undiverged worktree 3 should NOT be removed");
+    assert!(
+        base.join("feature-multi-1").exists(),
+        "undiverged worktree 1 should NOT be removed"
+    );
+    assert!(
+        base.join("feature-multi-2").exists(),
+        "undiverged worktree 2 should NOT be removed"
+    );
+    assert!(
+        base.join("feature-multi-3").exists(),
+        "undiverged worktree 3 should NOT be removed"
+    );
 }
 
 #[test]
@@ -1152,7 +1235,10 @@ fn clean_removes_empty_worktrees_dir() {
 
     // Create a worktree, add a commit, then merge it with --no-ff
     run_waku(&repo, &["create", "feature-empty-cleanup"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-empty-cleanup");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-empty-cleanup");
     fs::write(wt_path.join("feature.txt"), "feature\n").unwrap();
     run_git(&wt_path, &["add", "."]);
     run_git(&wt_path, &["commit", "-m", "add feature"]);
@@ -1163,10 +1249,7 @@ fn clean_removes_empty_worktrees_dir() {
     assert!(output.status.success());
 
     let base = repo.parent().unwrap().join("myrepo-worktrees");
-    assert!(
-        !base.exists(),
-        "empty worktrees base dir should be removed"
-    );
+    assert!(!base.exists(), "empty worktrees base dir should be removed");
 }
 
 #[test]
@@ -1175,7 +1258,10 @@ fn clean_warns_without_force_on_dirty_worktree() {
 
     // Create worktree, add a commit, merge it, then make it dirty
     run_waku(&repo, &["create", "feature-dirty"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-dirty");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-dirty");
     fs::write(wt_path.join("feature.txt"), "feature\n").unwrap();
     run_git(&wt_path, &["add", "."]);
     run_git(&wt_path, &["commit", "-m", "add feature"]);
@@ -1188,7 +1274,10 @@ fn clean_warns_without_force_on_dirty_worktree() {
     assert!(output.status.success());
 
     // Worktree should still exist (removal failed)
-    assert!(wt_path.exists(), "dirty worktree should NOT be removed without --force");
+    assert!(
+        wt_path.exists(),
+        "dirty worktree should NOT be removed without --force"
+    );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -1203,7 +1292,10 @@ fn clean_force_removes_dirty_worktree() {
 
     // Create worktree, add a commit, merge it, then make it dirty
     run_waku(&repo, &["create", "feature-dirty-force"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-dirty-force");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-dirty-force");
     fs::write(wt_path.join("feature.txt"), "feature\n").unwrap();
     run_git(&wt_path, &["add", "."]);
     run_git(&wt_path, &["commit", "-m", "add feature"]);
@@ -1219,7 +1311,10 @@ fn clean_force_removes_dirty_worktree() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert!(!wt_path.exists(), "dirty worktree should be removed with --force");
+    assert!(
+        !wt_path.exists(),
+        "dirty worktree should be removed with --force"
+    );
 }
 
 #[test]
@@ -1228,7 +1323,10 @@ fn clean_yes_keeps_detached_worktree_with_unique_commits() {
 
     // Create a worktree, add a commit, then detach it and delete the branch
     run_waku(&repo, &["create", "feature-detached"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-detached");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-detached");
     fs::write(wt_path.join("feature.txt"), "feature\n").unwrap();
     run_git(&wt_path, &["add", "."]);
     run_git(&wt_path, &["commit", "-m", "add feature"]);
@@ -1275,7 +1373,10 @@ fn clean_does_not_remove_dirty_detached_worktree() {
 
     // Create a worktree, detach it, delete the branch
     run_waku(&repo, &["create", "feature-detached-dirty"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-detached-dirty");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-detached-dirty");
     run_git(&wt_path, &["checkout", "--detach"]);
     run_git(&repo, &["branch", "-D", "feature-detached-dirty"]);
 
@@ -1334,7 +1435,10 @@ fn remove_keep_branch() {
     let (_tmp, repo) = setup_repo();
 
     run_waku(&repo, &["create", "feature-rm-keep"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-rm-keep");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-rm-keep");
     assert!(wt_path.exists());
 
     let output = run_waku(&repo, &["remove", "feature-rm-keep", "--keep-branch"]);
@@ -1386,7 +1490,10 @@ fn remove_force_dirty() {
     let (_tmp, repo) = setup_repo();
 
     run_waku(&repo, &["create", "feature-rm-dirty"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-rm-dirty");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-rm-dirty");
 
     // Make it dirty
     fs::write(wt_path.join("untracked.txt"), "dirty\n").unwrap();
@@ -1406,7 +1513,10 @@ fn remove_force_dirty() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert!(!wt_path.exists(), "dirty worktree should be removed with --force");
+    assert!(
+        !wt_path.exists(),
+        "dirty worktree should be removed with --force"
+    );
 }
 
 #[test]
@@ -1419,7 +1529,10 @@ fn remove_cleans_up_symlinks_before_remove() {
     run_git(&repo, &["config", "waku.link.include", "node_modules"]);
 
     run_waku(&repo, &["create", "feature-rm-symlink"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-rm-symlink");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-rm-symlink");
     assert!(wt_path.join("node_modules").is_symlink());
 
     // rm without --force should succeed because symlinks are cleaned up first
@@ -1442,7 +1555,10 @@ fn clean_cleans_up_symlinks_before_remove() {
     run_git(&repo, &["config", "waku.link.include", "node_modules"]);
 
     run_waku(&repo, &["create", "feature-clean-symlink"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-clean-symlink");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-clean-symlink");
     assert!(wt_path.join("node_modules").is_symlink());
 
     // Add a commit (not touching node_modules) and merge the branch
@@ -1484,7 +1600,10 @@ fn create_copies_file() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-copy-file");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-copy-file");
     let copied = wt_path.join("Cargo.lock");
     assert!(copied.exists(), "Cargo.lock should be copied");
     assert!(!copied.is_symlink(), "Cargo.lock should NOT be a symlink");
@@ -1519,7 +1638,10 @@ fn create_copy_from_base_keeps_tracked_file_at_base_revision() {
         .parent()
         .unwrap()
         .join("myrepo-worktrees/feature-copy-from-base");
-    assert_eq!(fs::read_to_string(wt_path.join("Cargo.lock")).unwrap(), "base-lock\n");
+    assert_eq!(
+        fs::read_to_string(wt_path.join("Cargo.lock")).unwrap(),
+        "base-lock\n"
+    );
     run_git(&wt_path, &["diff", "--quiet", "HEAD"]);
 }
 
@@ -1542,7 +1664,10 @@ fn create_copies_directory() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-copy-dir");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-copy-dir");
     let copied = wt_path.join(".direnv");
     assert!(copied.is_dir(), ".direnv should be a directory");
     assert!(!copied.is_symlink(), ".direnv should NOT be a symlink");
@@ -1566,9 +1691,15 @@ fn create_copies_in_parallel_multiple_entries() {
     fs::write(repo.join("dir1/a.txt"), "a").unwrap();
     fs::write(repo.join("file2.txt"), "content2").unwrap();
 
-    run_git(&repo, &["config", "--add", "waku.copy.include", "file1.txt"]);
+    run_git(
+        &repo,
+        &["config", "--add", "waku.copy.include", "file1.txt"],
+    );
     run_git(&repo, &["config", "--add", "waku.copy.include", "dir1"]);
-    run_git(&repo, &["config", "--add", "waku.copy.include", "file2.txt"]);
+    run_git(
+        &repo,
+        &["config", "--add", "waku.copy.include", "file2.txt"],
+    );
 
     let output = run_waku(&repo, &["create", "feature-copy-multi"]);
     assert!(
@@ -1577,10 +1708,19 @@ fn create_copies_in_parallel_multiple_entries() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-copy-multi");
-    assert_eq!(fs::read_to_string(wt_path.join("file1.txt")).unwrap(), "content1");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-copy-multi");
+    assert_eq!(
+        fs::read_to_string(wt_path.join("file1.txt")).unwrap(),
+        "content1"
+    );
     assert_eq!(fs::read_to_string(wt_path.join("dir1/a.txt")).unwrap(), "a");
-    assert_eq!(fs::read_to_string(wt_path.join("file2.txt")).unwrap(), "content2");
+    assert_eq!(
+        fs::read_to_string(wt_path.join("file2.txt")).unwrap(),
+        "content2"
+    );
 }
 
 #[test]
@@ -1608,7 +1748,10 @@ fn remove_cleans_up_copies_before_remove() {
     run_git(&repo, &["config", "waku.copy.include", ".direnv"]);
 
     run_waku(&repo, &["create", "feature-rm-copy"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-rm-copy");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-rm-copy");
     assert!(wt_path.join(".direnv").is_dir());
 
     let output = run_waku(&repo, &["remove", "feature-rm-copy"]);
@@ -1632,7 +1775,10 @@ fn create_copies_directory_with_exclude() {
     fs::write(repo.join(".direnv/cache/big"), "large data").unwrap();
 
     run_git(&repo, &["config", "--add", "waku.copy.include", ".direnv"]);
-    run_git(&repo, &["config", "--add", "waku.copy.exclude", ".direnv/cache"]);
+    run_git(
+        &repo,
+        &["config", "--add", "waku.copy.exclude", ".direnv/cache"],
+    );
 
     let output = run_waku(&repo, &["create", "feature-copy-exclude"]);
     assert!(
@@ -1641,7 +1787,10 @@ fn create_copies_directory_with_exclude() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-copy-exclude");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-copy-exclude");
     assert_eq!(
         fs::read_to_string(wt_path.join(".direnv/env")).unwrap(),
         "export FOO=bar",
@@ -1662,14 +1811,26 @@ fn create_copies_exclude_file_in_directory() {
     fs::write(repo.join("config/secret.key"), "secret").unwrap();
 
     run_git(&repo, &["config", "--add", "waku.copy.include", "config"]);
-    run_git(&repo, &["config", "--add", "waku.copy.exclude", "config/secret.key"]);
+    run_git(
+        &repo,
+        &["config", "--add", "waku.copy.exclude", "config/secret.key"],
+    );
 
     let output = run_waku(&repo, &["create", "feature-exclude-file"]);
     assert!(output.status.success());
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-exclude-file");
-    assert!(wt_path.join("config/app.toml").exists(), "app.toml should be copied");
-    assert!(!wt_path.join("config/secret.key").exists(), "secret.key should be excluded");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-exclude-file");
+    assert!(
+        wt_path.join("config/app.toml").exists(),
+        "app.toml should be copied"
+    );
+    assert!(
+        !wt_path.join("config/secret.key").exists(),
+        "secret.key should be excluded"
+    );
 }
 
 #[test]
@@ -1690,10 +1851,23 @@ fn create_copies_with_multiple_excludes() {
     let output = run_waku(&repo, &["create", "feature-multi-exclude"]);
     assert!(output.status.success());
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-multi-exclude");
-    assert!(!wt_path.join("vendor/a").exists(), "vendor/a should be excluded");
-    assert!(!wt_path.join("vendor/b").exists(), "vendor/b should be excluded");
-    assert_eq!(fs::read_to_string(wt_path.join("vendor/c/x")).unwrap(), "c", "vendor/c should be copied");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-multi-exclude");
+    assert!(
+        !wt_path.join("vendor/a").exists(),
+        "vendor/a should be excluded"
+    );
+    assert!(
+        !wt_path.join("vendor/b").exists(),
+        "vendor/b should be excluded"
+    );
+    assert_eq!(
+        fs::read_to_string(wt_path.join("vendor/c/x")).unwrap(),
+        "c",
+        "vendor/c should be copied"
+    );
 }
 
 #[test]
@@ -1705,14 +1879,31 @@ fn create_copies_exclude_no_false_prefix() {
     fs::write(repo.join("node_modules/.cache/x"), "excluded").unwrap();
     fs::write(repo.join("node_modules/.cache-v2/y"), "kept").unwrap();
 
-    run_git(&repo, &["config", "--add", "waku.copy.include", "node_modules"]);
-    run_git(&repo, &["config", "--add", "waku.copy.exclude", "node_modules/.cache"]);
+    run_git(
+        &repo,
+        &["config", "--add", "waku.copy.include", "node_modules"],
+    );
+    run_git(
+        &repo,
+        &[
+            "config",
+            "--add",
+            "waku.copy.exclude",
+            "node_modules/.cache",
+        ],
+    );
 
     let output = run_waku(&repo, &["create", "feature-no-false-prefix"]);
     assert!(output.status.success());
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-no-false-prefix");
-    assert!(!wt_path.join("node_modules/.cache").exists(), ".cache should be excluded");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-no-false-prefix");
+    assert!(
+        !wt_path.join("node_modules/.cache").exists(),
+        ".cache should be excluded"
+    );
     assert!(
         wt_path.join("node_modules/.cache-v2/y").exists(),
         ".cache-v2 should NOT be excluded (no false prefix match)"
@@ -1732,8 +1923,14 @@ fn create_copies_exclude_matches_include_skips_entirely() {
     let output = run_waku(&repo, &["create", "feature-exclude-all"]);
     assert!(output.status.success());
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-exclude-all");
-    assert!(!wt_path.join("data").exists(), "data should not be copied when excluded entirely");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-exclude-all");
+    assert!(
+        !wt_path.join("data").exists(),
+        "data should not be copied when excluded entirely"
+    );
 }
 
 // --- .worktreeinclude tests ---
@@ -1764,11 +1961,23 @@ fn create_copies_worktreeinclude_files_by_default() {
     let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-wti");
     // .env should be copied (not symlinked)
     assert!(wt_path.join(".env").exists(), ".env should be copied");
-    assert!(!wt_path.join(".env").is_symlink(), ".env should NOT be a symlink");
-    assert_eq!(fs::read_to_string(wt_path.join(".env")).unwrap(), "SECRET=123");
+    assert!(
+        !wt_path.join(".env").is_symlink(),
+        ".env should NOT be a symlink"
+    );
+    assert_eq!(
+        fs::read_to_string(wt_path.join(".env")).unwrap(),
+        "SECRET=123"
+    );
     // node_modules should be copied
-    assert!(wt_path.join("node_modules").is_dir(), "node_modules should be copied");
-    assert!(!wt_path.join("node_modules").is_symlink(), "node_modules should NOT be a symlink");
+    assert!(
+        wt_path.join("node_modules").is_dir(),
+        "node_modules should be copied"
+    );
+    assert!(
+        !wt_path.join("node_modules").is_symlink(),
+        "node_modules should NOT be a symlink"
+    );
     assert_eq!(
         fs::read_to_string(wt_path.join("node_modules/pkg.json")).unwrap(),
         "{}"
@@ -2068,9 +2277,18 @@ fn create_links_worktreeinclude_files_when_configured() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-wti-link");
-    assert!(wt_path.join(".env").is_symlink(), ".env should be a symlink");
-    assert_eq!(fs::read_to_string(wt_path.join(".env")).unwrap(), "SECRET=123");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-wti-link");
+    assert!(
+        wt_path.join(".env").is_symlink(),
+        ".env should be a symlink"
+    );
+    assert_eq!(
+        fs::read_to_string(wt_path.join(".env")).unwrap(),
+        "SECRET=123"
+    );
 }
 
 #[test]
@@ -2094,7 +2312,10 @@ fn create_ignores_worktreeinclude_when_configured() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-wti-ignore");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-wti-ignore");
     assert!(
         !wt_path.join(".env").exists(),
         ".env should NOT be present when mode is ignore"
@@ -2139,7 +2360,10 @@ fn remove_cleans_up_worktreeinclude_copies() {
     fs::write(repo.join(".env"), "SECRET=123").unwrap();
 
     run_waku(&repo, &["create", "feature-wti-rm"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-wti-rm");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-wti-rm");
     assert!(wt_path.join(".env").exists());
 
     let output = run_waku(&repo, &["remove", "feature-wti-rm"]);
@@ -2167,7 +2391,10 @@ fn create_run_returns_worktree_path() {
     );
 
     let wt_path = result.expect("run() should succeed");
-    let expected = repo.parent().unwrap().join("myrepo-worktrees/feature-api-path");
+    let expected = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-api-path");
     assert_eq!(wt_path, expected);
     assert!(wt_path.exists(), "returned path should exist");
     assert!(
@@ -2192,7 +2419,9 @@ fn create_quiet_suppresses_stderr() {
     // the CLI still works as expected and returns correct path
     let path_output = run_waku(&repo, &["path", "feature-quiet"]);
     assert!(path_output.status.success());
-    let path = String::from_utf8_lossy(&path_output.stdout).trim().to_string();
+    let path = String::from_utf8_lossy(&path_output.stdout)
+        .trim()
+        .to_string();
     assert!(
         PathBuf::from(&path).exists(),
         "path returned should exist: {path}"
@@ -2212,10 +2441,7 @@ fn completions_generates_zsh() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        !stdout.is_empty(),
-        "completions should produce output"
-    );
+    assert!(!stdout.is_empty(), "completions should produce output");
     assert!(
         stdout.contains("git-waku") || stdout.contains("_git-waku"),
         "completions should reference the binary name: {stdout}"
@@ -2234,7 +2460,10 @@ fn remove_dirty_check_ignores_waku_symlinks() {
     run_git(&repo, &["commit", "-m", "add node_modules"]);
 
     run_waku(&repo, &["create", "feature-waku-link"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-waku-link");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-waku-link");
 
     // The symlink itself is a waku artifact and should not count as dirty.
     // Remove without --force should succeed on a clean worktree with only waku artifacts.
@@ -2258,7 +2487,10 @@ fn remove_dirty_check_detects_real_changes_alongside_waku_artifacts() {
     run_git(&repo, &["commit", "-m", "add node_modules"]);
 
     run_waku(&repo, &["create", "feature-waku-dirty"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-waku-dirty");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-waku-dirty");
 
     // Add a real untracked file (not a waku artifact)
     fs::write(wt_path.join("real-change.txt"), "dirty\n").unwrap();
@@ -2282,7 +2514,10 @@ fn remove_cleans_up_empty_dirs_even_when_branch_delete_fails() {
     let (_tmp, repo) = setup_repo();
 
     run_waku(&repo, &["create", "feature-branch-fail"]);
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-branch-fail");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-branch-fail");
 
     // Add an unmerged commit so that `git branch -d` (without -D) will fail
     fs::write(wt_path.join("unmerged.txt"), "not merged\n").unwrap();
@@ -2325,7 +2560,10 @@ fn config_get_regexp_returns_empty_for_no_match() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-no-config");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-no-config");
     assert!(wt_path.exists());
 }
 
@@ -2352,7 +2590,10 @@ fn create_worktreeinclude_glob_copies_nested_env() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-glob-env");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/feature-glob-env");
     assert!(
         wt_path.join(".env").exists(),
         "root .env should be copied to worktree"
@@ -2408,7 +2649,10 @@ fn create_with_existing_branch() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/existing-branch");
+    let wt_path = repo
+        .parent()
+        .unwrap()
+        .join("myrepo-worktrees/existing-branch");
     assert!(wt_path.exists(), "worktree directory should exist");
 }
 
@@ -2650,7 +2894,10 @@ fn create_uses_fetch_config() {
     run_git(&upstream, &["checkout", "-b", "config-fetched-feature"]);
     fs::write(upstream.join("config-fetched.txt"), "from fetched remote\n").unwrap();
     run_git(&upstream, &["add", "."]);
-    run_git(&upstream, &["commit", "-m", "config fetched feature commit"]);
+    run_git(
+        &upstream,
+        &["commit", "-m", "config fetched feature commit"],
+    );
     run_git(&upstream, &["push", "origin", "config-fetched-feature"]);
 
     let output = run_waku(&repo, &["create", "config-fetched-feature"]);
@@ -2729,14 +2976,21 @@ fn create_uses_from_default_branch_config() {
     run_git(&upstream, &["config", "user.name", "Test"]);
     run_git(&upstream, &["config", "commit.gpgsign", "false"]);
 
-    fs::write(upstream.join("config-default-branch.txt"), "from default branch\n").unwrap();
+    fs::write(
+        upstream.join("config-default-branch.txt"),
+        "from default branch\n",
+    )
+    .unwrap();
     run_git(&upstream, &["add", "."]);
     run_git(&upstream, &["commit", "-m", "advance main from config"]);
     run_git(&upstream, &["push", "origin", "main"]);
 
     run_git(&repo, &["fetch", "origin"]);
     run_git(&repo, &["checkout", "-b", "local-config-base"]);
-    run_git(&repo, &["config", "waku.create.from-default-branch", "true"]);
+    run_git(
+        &repo,
+        &["config", "waku.create.from-default-branch", "true"],
+    );
 
     let output = run_waku(&repo, &["create", "from-default-config"]);
     assert!(
@@ -2764,10 +3018,7 @@ fn open_auto_creates_worktree_when_missing() {
     run_git(&repo, &["config", "waku.command.editor", "true"]);
 
     // Worktree does not exist yet
-    let wt_path = repo
-        .parent()
-        .unwrap()
-        .join("myrepo-worktrees/auto-open");
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/auto-open");
     assert!(!wt_path.exists());
 
     // open should auto-create the worktree and succeed
@@ -2785,7 +3036,10 @@ fn open_auto_creates_worktree_when_missing() {
 fn create_agent_command_accepts_configured_arguments() {
     let (_tmp, repo) = setup_repo();
 
-    run_git(&repo, &["config", "waku.command.agent", "touch configured-by-agent"]);
+    run_git(
+        &repo,
+        &["config", "waku.command.agent", "touch configured-by-agent"],
+    );
 
     let output = run_waku(&repo, &["create", "feature-agent-config", "--agent"]);
     assert!(
@@ -2887,7 +3141,10 @@ fn open_agent_command_merges_configured_and_cli_arguments() {
         &["config", "waku.command.agent", "touch from-config"],
     );
 
-    let output = run_waku(&repo, &["open", "feature-open-agent", "--agent", "--", "from-cli"]);
+    let output = run_waku(
+        &repo,
+        &["open", "feature-open-agent", "--agent", "--", "from-cli"],
+    );
     assert!(
         output.status.success(),
         "git-waku open --agent should merge configured and CLI arguments: {}",
@@ -3010,7 +3267,10 @@ fn config_sets_local_value() {
 fn config_adds_multi_value() {
     let (_tmp, repo) = setup_repo();
 
-    let output = run_waku(&repo, &["config", "--add", "waku.link.include", "node_modules"]);
+    let output = run_waku(
+        &repo,
+        &["config", "--add", "waku.link.include", "node_modules"],
+    );
     assert!(
         output.status.success(),
         "git-waku config --add failed: {}",
@@ -3028,7 +3288,10 @@ fn config_adds_multi_value() {
         .current_dir(&repo)
         .output()
         .unwrap();
-    assert!(values.status.success(), "git config --get-all should succeed");
+    assert!(
+        values.status.success(),
+        "git config --get-all should succeed"
+    );
     assert_eq!(
         String::from_utf8_lossy(&values.stdout)
             .lines()
@@ -3087,7 +3350,10 @@ fn config_sets_global_value() {
         .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
         .output()
         .unwrap();
-    assert!(value.status.success(), "git config --global --get should succeed");
+    assert!(
+        value.status.success(),
+        "git config --global --get should succeed"
+    );
     assert_eq!(String::from_utf8_lossy(&value.stdout).trim(), "claude");
 }
 // --- Gone branch (closed PR) tests ---
@@ -3098,10 +3364,7 @@ fn clean_yes_keeps_gone_branch_with_unique_commits() {
 
     // Create a worktree with a branch that tracks origin
     run_waku(&repo, &["create", "feature-gone"]);
-    let wt_path = repo
-        .parent()
-        .unwrap()
-        .join("myrepo-worktrees/feature-gone");
+    let wt_path = repo.parent().unwrap().join("myrepo-worktrees/feature-gone");
     fs::write(wt_path.join("feature.txt"), "feature\n").unwrap();
     run_git(&wt_path, &["add", "."]);
     run_git(&wt_path, &["commit", "-m", "add feature"]);
@@ -3117,7 +3380,10 @@ fn clean_yes_keeps_gone_branch_with_unique_commits() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert!(wt_path.exists(), "gone branch with unique commits should be kept");
+    assert!(
+        wt_path.exists(),
+        "gone branch with unique commits should be kept"
+    );
 
     // The local branch is preserved with the worktree.
     let branch_check = Command::new("git")
@@ -3165,10 +3431,7 @@ fn clean_dry_run_shows_closed_label() {
         stdout.contains("closed") && stdout.contains("1 unique") && stdout.contains("clean"),
         "dry-run should show why the worktree needs review: {stdout}"
     );
-    assert!(
-        wt_path.exists(),
-        "dry-run should not remove worktree"
-    );
+    assert!(wt_path.exists(), "dry-run should not remove worktree");
 }
 
 #[test]

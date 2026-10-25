@@ -1,6 +1,6 @@
 use std::env;
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 
 use crate::git;
 
