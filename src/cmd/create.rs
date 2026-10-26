@@ -27,7 +27,7 @@ pub struct CreateOptions {
     pub root: Option<PathBuf>,
 }
 
-const CONFIG_PATTERN: &str = r"^(waku\.|checkout\.workers$)";
+pub(super) const CONFIG_PATTERN: &str = r"^(waku\.|checkout\.workers$)";
 
 pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     if let Some(root) = opts.root.clone() {
@@ -47,13 +47,12 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
         )
     });
     let (root, toplevel) = located?;
-    // A linked worktree may have its own config, so read the main worktree's.
-    let waku_config = if toplevel == root {
-        config?
-    } else {
-        git::config_get_regexp_in(&root, CONFIG_PATTERN)?
-    };
-    run_with_config(branch, opts, &root, &waku_config, refs.ok())
+    if toplevel == root {
+        return run_with_config(branch, opts, &root, &config?, refs.ok());
+    }
+    // Elsewhere (a linked worktree may have its own config), read from the root.
+    let waku_config = git::config_get_regexp_in(&root, CONFIG_PATTERN)?;
+    run_with_config(branch, opts, &root, &waku_config, None)
 }
 
 pub(super) fn run_with_config(
