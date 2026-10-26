@@ -6,13 +6,18 @@ use crate::git;
 
 /// Get the repository root (toplevel of the main worktree).
 pub fn repo_root() -> Result<PathBuf> {
+    Ok(repo_root_and_toplevel()?.0)
+}
+
+/// Get the repository root and the toplevel of the current worktree.
+pub fn repo_root_and_toplevel() -> Result<(PathBuf, PathBuf)> {
     let output = git::git_output(&["rev-parse", "--git-common-dir", "--show-toplevel"])?;
     let mut lines = output.lines();
     let common_dir = lines.next().context("missing --git-common-dir output")?;
     let toplevel = lines.next().context("missing --show-toplevel output")?;
 
     if common_dir == ".git" {
-        return Ok(PathBuf::from(toplevel));
+        return Ok((PathBuf::from(toplevel), PathBuf::from(toplevel)));
     }
 
     let common_path = PathBuf::from(common_dir);
@@ -24,7 +29,7 @@ pub fn repo_root() -> Result<PathBuf> {
     let root = git_dir
         .parent()
         .with_context(|| format!("cannot find parent of {}", git_dir.display()))?;
-    Ok(root.to_path_buf())
+    Ok((root.to_path_buf(), PathBuf::from(toplevel)))
 }
 
 /// Compute the default base directory for worktrees: `{parent}/{repo-name}-worktrees/`

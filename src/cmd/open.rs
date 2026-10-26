@@ -37,6 +37,7 @@ pub fn run(
                 },
                 &root,
                 &waku_config,
+                None,
             )?,
         },
     };

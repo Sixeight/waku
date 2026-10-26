@@ -27,13 +27,33 @@ pub struct CreateOptions {
     pub root: Option<PathBuf>,
 }
 
+const CONFIG_PATTERN: &str = r"^(waku\.|checkout\.workers$)";
+
 pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
-    let root = match opts.root {
-        Some(ref r) => r.clone(),
-        None => worktree::repo_root()?,
+    if let Some(root) = opts.root.clone() {
+        let waku_config = git::config_get_regexp_in(&root, CONFIG_PATTERN)?;
+        return run_with_config(branch, opts, &root, &waku_config, None);
+    }
+    // Config and refs read from the current directory match the main worktree's
+    // when run from it, so all three lookups can start at once.
+    let cwd = Path::new(".");
+    let (located, config, refs) = std::thread::scope(|s| {
+        let config = s.spawn(|| git::config_get_regexp_in(cwd, CONFIG_PATTERN));
+        let refs = s.spawn(|| git::branch_refs_exist(cwd, branch));
+        (
+            worktree::repo_root_and_toplevel(),
+            config.join().unwrap(),
+            refs.join().unwrap(),
+        )
+    });
+    let (root, toplevel) = located?;
+    // A linked worktree may have its own config, so read the main worktree's.
+    let waku_config = if toplevel == root {
+        config?
+    } else {
+        git::config_get_regexp_in(&root, CONFIG_PATTERN)?
     };
-    let waku_config = git::config_get_regexp_in(&root, r"^(waku\.|checkout\.workers$)")?;
-    run_with_config(branch, opts, &root, &waku_config)
+    run_with_config(branch, opts, &root, &waku_config, refs.ok())
 }
 
 pub(super) fn run_with_config(
@@ -41,6 +61,7 @@ pub(super) fn run_with_config(
     opts: CreateOptions,
     root: &Path,
     waku_config: &[(String, String)],
+    mut branch_refs: Option<(bool, bool)>,
 ) -> Result<PathBuf> {
     let wt_path = worktree::worktree_path_with_config(root, branch, waku_config)?;
     let fetch = !opts.no_fetch && (opts.fetch || config_bool(waku_config, "waku.create.fetch"));
@@ -55,6 +76,8 @@ pub(super) fn run_with_config(
             Some(spinner("Fetching origin".to_string()))
         };
         git::fetch_origin(root)?;
+        // The fetch may have added the remote branch.
+        branch_refs = None;
         if let Some(sp) = sp {
             sp.finish_and_clear();
         }
@@ -75,10 +98,10 @@ pub(super) fn run_with_config(
             root,
             &wt_path,
             branch,
-            opts.from.as_deref(),
+            &opts,
             from_default_branch,
-            opts.quiet,
             waku_config,
+            branch_refs,
         );
 
         let sp = if !opts.quiet && !wti_handle.is_finished() {
@@ -306,11 +329,12 @@ fn create_worktree(
     root: &Path,
     wt_path: &Path,
     branch: &str,
-    from: Option<&str>,
+    opts: &CreateOptions,
     from_default_branch: bool,
-    quiet: bool,
     config: &[(String, String)],
+    branch_refs: Option<(bool, bool)>,
 ) -> Result<Option<String>> {
+    let (from, quiet) = (opts.from.as_deref(), opts.quiet);
     if wt_path.exists() {
         if !quiet {
             eprintln!(
@@ -328,7 +352,10 @@ fn create_worktree(
         Some(spinner(format!("Creating worktree {branch}")))
     };
     let wt_path_str = wt_path.to_string_lossy();
-    let (local_exists, remote_exists) = git::branch_refs_exist(root, branch)?;
+    let (local_exists, remote_exists) = match branch_refs {
+        Some(refs) => refs,
+        None => git::branch_refs_exist(root, branch)?,
+    };
     let mut add_args = Vec::new();
     if !config.iter().any(|(key, _)| key == "checkout.workers") {
         add_args.extend_from_slice(&["-c", "checkout.workers=8"]);
