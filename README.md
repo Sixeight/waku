@@ -8,11 +8,10 @@ worktrees whose branches have been merged.
 
 ## Fast
 
-Creating a worktree usually means a trade-off: fetch first and wait on the
-network, or skip the fetch and start from whatever refs you already have. waku
-avoids it. With `waku.create.fetch`, `create` returns from cached refs and
-fast-forwards the new branch when the background fetch lands. You get the
-fetched commit without the wait.
+Most tools either wait on the network to fetch or start from stale refs. With
+`waku.create.fetch`, `create` returns from cached refs and fast-forwards the new
+branch when the background fetch lands, so you get the fetched commit without
+the wait.
 
 Median `create` time in ms, waku against the fastest of worktrunk, gtr,
 git-wt, gwq, wtp, rabi, and workz:
@@ -28,8 +27,8 @@ git-wt, gwq, wtp, rabi, and workz:
 Against an origin that answers after 300 ms, wtp and workz return in about
 8 ms, faster than waku. They never fetch, so their worktrees stay on the old
 commit; gtr is the only other tool that ends on the fetched commit. On django,
-waku ends on the fetched commit too and still finishes in half the time of the
-next tool, because it checks out with `checkout.workers=8`.
+waku also ends on the fetched commit, and checks out about twice as fast as the
+next tool because it runs `git worktree add` with `checkout.workers=8`.
 
 Measured on Linux (btrfs on NVMe) with Git 2.56.0. See
 [docs/performance.md](docs/performance.md) for the full table, method, and how
