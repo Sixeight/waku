@@ -2,9 +2,38 @@
 
 **waku** (枠) — a frame, a dedicated space.
 
-`git-waku` creates, opens, and cleans up Git worktrees. It shares dependencies
-with new worktrees, launches your editor or AI agent, and removes worktrees
-whose branches have been merged.
+`git-waku` is a fast Git worktree manager. It creates worktrees, shares
+dependencies with them, launches your editor or AI agent, and removes
+worktrees whose branches have been merged.
+
+## Fast
+
+Creating a worktree usually means a trade-off: fetch first and wait on the
+network, or skip the fetch and start from whatever refs you already have. waku
+avoids it. With `waku.create.fetch`, `create` returns from cached refs and
+fast-forwards the new branch when the background fetch lands. You get the
+fetched commit without the wait.
+
+Median `create` time in ms, waku against the fastest of worktrunk, gtr,
+git-wt, gwq, wtp, rabi, and workz:
+
+| Scenario | waku | Next fastest |
+| --- | ---: | ---: |
+| 22-file repository | 6.9 | 7.7 (wtp) |
+| Copy 640 files in `node_modules/` | 13.8 | 17.3 (workz) |
+| Copy 5,000 files (200 MB) | 53.2 | 77.2 (workz) |
+| django, about 7,000 files | 106.5 | 228.2 (workz) |
+| Origin with 300 ms latency, fresh result | 11.0 | 414.7 (gtr) |
+
+Against an origin that answers after 300 ms, wtp and workz return in about
+8 ms, faster than waku. They never fetch, so their worktrees stay on the old
+commit; gtr is the only other tool that ends on the fetched commit. On django,
+waku ends on the fetched commit too and still finishes in half the time of the
+next tool, because it checks out with `checkout.workers=8`.
+
+Measured on Linux (btrfs on NVMe) with Git 2.56.0. See
+[docs/performance.md](docs/performance.md) for the full table, method, and how
+to reproduce.
 
 ## Install
 
@@ -126,15 +155,6 @@ bring into new worktrees. It uses `.gitignore` syntax, including `!` negation.
 node_modules/
 !.claude/worktrees/**
 ```
-
-## Performance
-
-With `waku.create.fetch`, `create` does not wait for the network: it starts
-from cached refs and fast-forwards when the background fetch lands. On a 7,000-file repository it
-checks out about twice as fast as other worktree tools.
-
-See [docs/performance.md](docs/performance.md) for benchmarks, a comparison
-with other worktree tools, and how to run them.
 
 ## Acknowledgements
 
