@@ -546,6 +546,32 @@ fn create_replaces_slash_in_branch_name() {
 }
 
 #[test]
+fn create_from_linked_worktree_reads_main_worktree_config() {
+    let (_tmp, repo) = setup_repo();
+    run_git(&repo, &["config", "extensions.worktreeConfig", "true"]);
+    let linked = repo.parent().unwrap().join("linked");
+    run_git(
+        &repo,
+        &["worktree", "add", "-b", "linked", linked.to_str().unwrap()],
+    );
+    run_git(
+        &linked,
+        &["config", "--worktree", "waku.worktrees.path", "../linked-only"],
+    );
+
+    let output = run_waku(&linked, &["create", "feat", "--no-fetch"]);
+    assert!(
+        output.status.success(),
+        "git-waku create failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let parent = repo.parent().unwrap();
+    assert!(parent.join("myrepo-worktrees/feat").exists());
+    assert!(!parent.join("linked-only").exists());
+}
+
+#[test]
 fn create_warns_on_missing_link_source() {
     let (_tmp, repo) = setup_repo();
 
