@@ -9,15 +9,6 @@ mod merge;
 
 pub use merge::merge_noop_results;
 
-/// Run a git command and return its stdout as a trimmed string.
-pub fn git_output(args: &[&str]) -> Result<String> {
-    let output = Command::new("git")
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to execute: git {}", args.join(" ")))?;
-    parse_git_output(&output, args)
-}
-
 /// Run a git command with a specific working directory.
 pub fn git_output_in(dir: &Path, args: &[&str]) -> Result<String> {
     let stdout = git_output_raw_in(dir, args)?;
