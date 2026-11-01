@@ -151,19 +151,12 @@ pub(super) fn run_with_config(
     }
 
     if opts.agent {
-        let (cmd, args) = super::resolve_tool_command_with_override(
-            waku_config,
-            "agent",
-            opts.agent_command.as_deref(),
-        )?;
+        let (cmd, args) = super::tool_command(waku_config, "agent", opts.agent_command.as_deref())?;
         let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
         git::exec_command(&cmd, &args, &wt_path)?;
     } else if opts.editor {
-        let (cmd, args) = super::resolve_tool_command_with_override(
-            waku_config,
-            "editor",
-            opts.editor_command.as_deref(),
-        )?;
+        let (cmd, args) =
+            super::tool_command(waku_config, "editor", opts.editor_command.as_deref())?;
         let args: Vec<&str> = args.iter().map(|arg| arg.as_str()).collect();
         git::exec_command(&cmd, &args, &wt_path)?;
     } else if opts.cd {

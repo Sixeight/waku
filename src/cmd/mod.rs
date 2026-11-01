@@ -100,34 +100,24 @@ pub fn print_warning(context: &str, error: &anyhow::Error) {
     eprintln!("      {} {}", style("→").dim(), detail);
 }
 
-/// Resolve the configured command line for a tool, with defaults.
-/// The last matching entry wins, mirroring `git config --get` semantics.
-pub fn resolve_tool(config: &Config, tool: &str) -> String {
-    config
-        .last(&format!("waku.command.{tool}"))
-        .map(str::to_string)
-        .unwrap_or_else(|| match tool {
-            "agent" => "claude".to_string(),
-            _ => "nvim".to_string(),
-        })
-}
-
-/// Resolve the command and configured arguments for a tool.
-pub fn resolve_tool_command(config: &Config, tool: &str) -> Result<(String, Vec<String>)> {
-    let command_line = resolve_tool(config, tool);
-    parse_command_line(&command_line)
-}
-
-/// Resolve a command line from pre-loaded config, preferring a one-time override.
-pub fn resolve_tool_command_with_override(
+/// Resolve a tool command from pre-loaded config, preferring a one-time override.
+/// The last matching `waku.command.<tool>` entry wins, mirroring `git config --get`.
+pub fn tool_command(
     config: &Config,
     tool: &str,
     command_override: Option<&str>,
 ) -> Result<(String, Vec<String>)> {
-    match command_override {
-        Some(command_line) => parse_command_line(command_line),
-        None => resolve_tool_command(config, tool),
-    }
+    let command_line = match command_override {
+        Some(command_line) => command_line.to_string(),
+        None => config
+            .last(&format!("waku.command.{tool}"))
+            .map(str::to_string)
+            .unwrap_or_else(|| match tool {
+                "agent" => "claude".to_string(),
+                _ => "nvim".to_string(),
+            }),
+    };
+    parse_command_line(&command_line)
 }
 
 fn parse_command_line(command_line: &str) -> Result<(String, Vec<String>)> {
@@ -221,53 +211,79 @@ mod tests {
     }
 
     #[test]
-    fn resolve_tool_defaults() {
+    fn tool_command_defaults() {
         let config = Config::empty();
-        assert_eq!(resolve_tool(&config, "agent"), "claude");
-        assert_eq!(resolve_tool(&config, "editor"), "nvim");
+        assert_eq!(
+            tool_command(&config, "agent", None).unwrap(),
+            ("claude".into(), vec![])
+        );
+        assert_eq!(
+            tool_command(&config, "editor", None).unwrap(),
+            ("nvim".into(), vec![])
+        );
     }
 
     #[test]
-    fn resolve_tool_from_config() {
+    fn tool_command_from_config() {
         let config = Config::from_entries(vec![
             ("waku.command.agent".to_string(), "aider".to_string()),
             ("waku.command.editor".to_string(), "vim".to_string()),
         ]);
-        assert_eq!(resolve_tool(&config, "agent"), "aider");
-        assert_eq!(resolve_tool(&config, "editor"), "vim");
+        assert_eq!(
+            tool_command(&config, "agent", None).unwrap(),
+            ("aider".into(), vec![])
+        );
+        assert_eq!(
+            tool_command(&config, "editor", None).unwrap(),
+            ("vim".into(), vec![])
+        );
     }
 
     #[test]
-    fn resolve_tool_prefers_last_value_like_git_config_get() {
+    fn tool_command_prefers_last_value_like_git_config_get() {
         // git config --get-regexp lists system → global → local in order,
         // and `git config --get` returns the last (most specific) value.
         let config = Config::from_entries(vec![
             ("waku.command.agent".to_string(), "global-agent".to_string()),
             ("waku.command.agent".to_string(), "local-agent".to_string()),
         ]);
-        assert_eq!(resolve_tool(&config, "agent"), "local-agent");
+        assert_eq!(
+            tool_command(&config, "agent", None).unwrap(),
+            ("local-agent".into(), vec![])
+        );
     }
 
     #[test]
-    fn resolve_tool_command_splits_configured_arguments() {
+    fn tool_command_splits_configured_arguments() {
         let config = Config::from_entries(vec![(
             "waku.command.agent".to_string(),
             "claude --resume --model sonnet".to_string(),
         )]);
-        let (program, args) = resolve_tool_command(&config, "agent").unwrap();
+        let (program, args) = tool_command(&config, "agent", None).unwrap();
         assert_eq!(program, "claude");
         assert_eq!(args, vec!["--resume", "--model", "sonnet"]);
     }
 
     #[test]
-    fn resolve_tool_command_preserves_quoted_arguments() {
+    fn tool_command_preserves_quoted_arguments() {
         let config = Config::from_entries(vec![(
             "waku.command.agent".to_string(),
             "claude --append \"hello world\"".to_string(),
         )]);
-        let (program, args) = resolve_tool_command(&config, "agent").unwrap();
+        let (program, args) = tool_command(&config, "agent", None).unwrap();
         assert_eq!(program, "claude");
         assert_eq!(args, vec!["--append", "hello world"]);
+    }
+
+    #[test]
+    fn tool_command_prefers_override() {
+        let config = Config::from_entries(vec![(
+            "waku.command.editor".to_string(),
+            "nvim".to_string(),
+        )]);
+        let (program, args) = tool_command(&config, "editor", Some("code --wait")).unwrap();
+        assert_eq!(program, "code");
+        assert_eq!(args, vec!["--wait"]);
     }
 
     #[test]

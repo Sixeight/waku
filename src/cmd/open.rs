@@ -41,8 +41,7 @@ pub fn run(
             )?,
         },
     };
-    let (cmd, configured_args) =
-        super::resolve_tool_command_with_override(&waku_config, tool, command_override)?;
+    let (cmd, configured_args) = super::tool_command(&waku_config, tool, command_override)?;
     let args: Vec<&str> = configured_args
         .iter()
         .map(|arg| arg.as_str())
