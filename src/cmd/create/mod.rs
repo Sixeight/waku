@@ -5,11 +5,14 @@ use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use super::{
-    collect_worktreeinclude_files, config_bool, copy_recursive, copy_recursive_parallel,
-    remove_existing, spinner, WorktreeIncludeMode,
-};
+use super::{config_bool, spinner};
 use crate::{git, worktree};
+
+mod copy;
+use copy::{
+    collect_worktreeinclude_files, copy_recursive, copy_recursive_parallel, remove_existing,
+    WorktreeIncludeMode,
+};
 
 #[derive(Default)]
 pub struct CreateOptions {
