@@ -29,7 +29,7 @@ pub(super) enum WorktreeIncludeMode {
 
 impl WorktreeIncludeMode {
     pub(super) fn from_config(waku_config: &Config) -> Self {
-        match waku_config.first("waku.worktreeinclude") {
+        match waku_config.last("waku.worktreeinclude") {
             Some("link") => Self::Link,
             Some("ignore") => Self::Ignore,
             _ => Self::Copy,
@@ -253,6 +253,44 @@ fn copy_file(src: &Path, dst: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn worktreeinclude_mode_uses_last_value_when_duplicated() {
+        let config = Config::from_entries(vec![
+            ("waku.worktreeinclude".to_string(), "copy".to_string()),
+            ("waku.worktreeinclude".to_string(), "link".to_string()),
+        ]);
+        assert_eq!(
+            WorktreeIncludeMode::from_config(&config),
+            WorktreeIncludeMode::Link
+        );
+
+        let config = Config::from_entries(vec![
+            ("waku.worktreeinclude".to_string(), "link".to_string()),
+            ("waku.worktreeinclude".to_string(), "ignore".to_string()),
+        ]);
+        assert_eq!(
+            WorktreeIncludeMode::from_config(&config),
+            WorktreeIncludeMode::Ignore
+        );
+
+        let config = Config::from_entries(vec![
+            ("waku.worktreeinclude".to_string(), "ignore".to_string()),
+            ("waku.worktreeinclude".to_string(), "copy".to_string()),
+        ]);
+        assert_eq!(
+            WorktreeIncludeMode::from_config(&config),
+            WorktreeIncludeMode::Copy
+        );
+    }
+
+    #[test]
+    fn worktreeinclude_mode_defaults_to_copy() {
+        assert_eq!(
+            WorktreeIncludeMode::from_config(&Config::empty()),
+            WorktreeIncludeMode::Copy
+        );
+    }
 
     #[test]
     fn parallel_directory_copy_preserves_contents_links_and_exclusions() {
