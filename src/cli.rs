@@ -33,7 +33,7 @@ Selector keys:
   Space toggle   d diff   l unmerged commits   s status   Enter confirm   q quit";
 
 #[derive(Parser)]
-#[command(name = "git-waku", about = "Git worktree runner")]
+#[command(name = "git-waku", version, about = "Git worktree runner")]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
