@@ -27,7 +27,7 @@ pub fn run(
     };
     let dir = match branch {
         None => std::env::current_dir()?,
-        Some(b) => match worktree::resolve_worktree_with_config(&root, b, &waku_config) {
+        Some(b) => match worktree::resolve(&root, b, &waku_config) {
             Ok(dir) => dir,
             Err(_) => create::run_with_config(
                 b,
