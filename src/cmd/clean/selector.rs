@@ -1,6 +1,7 @@
 use console::{style, truncate_str, Term};
 
-use super::{candidate_title, table_header, table_layout, worktree_row, WorktreeAnnotations};
+use super::table::{candidate_title, table_header, table_layout, worktree_row};
+use super::WorktreeAnnotations;
 
 pub(super) struct SelectorDisplay {
     terminal_size: (u16, u16),
