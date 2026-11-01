@@ -48,9 +48,9 @@ fn worktrees_base(root: &Path) -> Result<PathBuf> {
 }
 
 /// Compute the base directory for worktrees using config override.
-/// Uses the first `waku.worktrees.path` value to preserve current semantics.
+/// Uses the last `waku.worktrees.path` value, matching `git config --get`.
 pub fn worktrees_base_with_config(root: &Path, config: &Config) -> Result<PathBuf> {
-    if let Some(path) = config.first("waku.worktrees.path") {
+    if let Some(path) = config.last("waku.worktrees.path") {
         let p = PathBuf::from(path);
         if p.is_absolute() {
             return Ok(p);
@@ -355,5 +355,22 @@ mod tests {
         )]);
         let path = worktree_path_with_config(root, "feature/foo", &config).unwrap();
         assert_eq!(path, PathBuf::from("/tmp/wt/feature-foo"));
+    }
+
+    #[test]
+    fn worktrees_base_uses_last_path_when_duplicated() {
+        let root = Path::new("/home/user/myrepo");
+        let config = Config::from_entries(vec![
+            (
+                "waku.worktrees.path".to_string(),
+                "/first/worktrees".to_string(),
+            ),
+            (
+                "waku.worktrees.path".to_string(),
+                "/last/worktrees".to_string(),
+            ),
+        ]);
+        let base = worktrees_base_with_config(root, &config).unwrap();
+        assert_eq!(base, PathBuf::from("/last/worktrees"));
     }
 }

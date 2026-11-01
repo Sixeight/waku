@@ -7,9 +7,9 @@ use crate::git;
 /// Git config entries used by waku, loaded in one `git config --get-regexp`.
 ///
 /// The pattern covers `waku.*`, `checkout.workers`, and `branch.*.remote`.
-/// Single-value lookups keep the current first-vs-last split:
-/// `first` for `waku.worktrees.path` / `waku.worktreeinclude`, `last` /
-/// `bool` for tool commands and flags (matching `git config --get`).
+/// Single-value lookups use the last matching entry (`last` / `bool`),
+/// matching `git config --get`. `first` remains for callers that need
+/// the earliest value.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Config {
     entries: Vec<(String, String)>,
@@ -123,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn first_and_last_preserve_current_multi_value_semantics() {
+    fn last_wins_for_duplicated_keys() {
         let config = entries(&[
             ("waku.worktrees.path", "/first"),
             ("waku.worktrees.path", "/last"),
@@ -131,14 +131,27 @@ mod tests {
             ("waku.worktreeinclude", "link"),
             ("waku.command.agent", "global-agent"),
             ("waku.command.agent", "local-agent"),
+            ("waku.create.fetch", "false"),
+            ("waku.create.fetch", "true"),
         ]);
-        assert_eq!(config.first("waku.worktrees.path"), Some("/first"));
         assert_eq!(config.last("waku.worktrees.path"), Some("/last"));
-        assert_eq!(config.first("waku.worktreeinclude"), Some("copy"));
         assert_eq!(config.last("waku.worktreeinclude"), Some("link"));
         assert_eq!(config.last("waku.command.agent"), Some("local-agent"));
-        assert_eq!(config.first("missing"), None);
+        assert!(config.bool("waku.create.fetch"));
         assert_eq!(config.last("missing"), None);
+    }
+
+    #[test]
+    fn first_still_returns_the_earliest_value() {
+        let config = entries(&[
+            ("waku.worktrees.path", "/first"),
+            ("waku.worktrees.path", "/last"),
+            ("waku.worktreeinclude", "copy"),
+            ("waku.worktreeinclude", "link"),
+        ]);
+        assert_eq!(config.first("waku.worktrees.path"), Some("/first"));
+        assert_eq!(config.first("waku.worktreeinclude"), Some("copy"));
+        assert_eq!(config.first("missing"), None);
     }
 
     #[test]
