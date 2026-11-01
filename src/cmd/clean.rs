@@ -4,7 +4,7 @@ use anyhow::Result;
 use console::{measure_text_width, style, truncate_str, Key, Term};
 
 use super::{cleanup_empty_dirs, print_warning, spinner};
-use crate::{git, parallel, worktree};
+use crate::{config::Config, git, parallel, worktree};
 
 mod agents;
 mod details;
@@ -80,7 +80,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         .collect();
     let (ref_oids, config) = std::thread::scope(|s| {
         let refs = s.spawn(|| git::ref_oids(&root).ok());
-        let config = s.spawn(|| git::config_get_regexp_in(&root, r"^(waku\.|branch\..*\.remote$)"));
+        let config = s.spawn(|| Config::load(&root));
         (refs.join().unwrap(), config.join().unwrap())
     });
     let waku_config = config?;

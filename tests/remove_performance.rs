@@ -3,6 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 use git_waku::cmd::remove::is_worktree_dirty;
+use git_waku::config::Config;
 use tempfile::TempDir;
 
 fn git(root: &Path, args: &[&str]) {
@@ -37,26 +38,26 @@ fn repository() -> TempDir {
     tmp
 }
 
-fn artifact_config(path: &str) -> Vec<(String, String)> {
-    vec![("waku.copy.include".into(), path.into())]
+fn artifact_config(path: &str) -> Config {
+    Config::from_entries(vec![("waku.copy.include".into(), path.into())])
 }
 
 #[test]
 fn dirty_check_detects_staged_unstaged_and_untracked_changes() {
     let tmp = repository();
     let root = tmp.path();
-    assert!(!is_worktree_dirty(root, &[]));
+    assert!(!is_worktree_dirty(root, &Config::empty()));
 
     fs::write(root.join("tracked.txt"), "modified\n").unwrap();
-    assert!(is_worktree_dirty(root, &[]));
+    assert!(is_worktree_dirty(root, &Config::empty()));
     git(root, &["add", "tracked.txt"]);
-    assert!(is_worktree_dirty(root, &[]));
+    assert!(is_worktree_dirty(root, &Config::empty()));
 
     fs::write(root.join("tracked.txt"), "original\n").unwrap();
-    assert!(is_worktree_dirty(root, &[]));
+    assert!(is_worktree_dirty(root, &Config::empty()));
     git(root, &["reset", "--hard", "HEAD"]);
     fs::write(root.join("untracked\nfile.txt"), "untracked\n").unwrap();
-    assert!(is_worktree_dirty(root, &[]));
+    assert!(is_worktree_dirty(root, &Config::empty()));
 }
 
 #[test]
@@ -97,8 +98,10 @@ fn dirty_check_checks_both_sides_of_renames_across_artifact_boundary() {
 fn dirty_check_excludes_artifact_symlinks_and_nested_copies() {
     let tmp = repository();
     let root = tmp.path();
-    let mut config = artifact_config("artifacts");
-    config.push(("waku.link.include".into(), "linked".into()));
+    let config = Config::from_entries(vec![
+        ("waku.copy.include".into(), "artifacts".into()),
+        ("waku.link.include".into(), "linked".into()),
+    ]);
     std::os::unix::fs::symlink(root.join("artifacts"), root.join("linked")).unwrap();
     fs::create_dir(root.join("artifacts/nested")).unwrap();
     fs::write(root.join("artifacts/nested/copy.txt"), "copy\n").unwrap();
@@ -125,20 +128,20 @@ fn dirty_check_protects_submodule_changes_even_when_configured_to_ignore_them() 
         ],
     );
     git(root, &["commit", "-q", "-m", "add submodule"]);
-    assert!(!is_worktree_dirty(root, &[]));
+    assert!(!is_worktree_dirty(root, &Config::empty()));
     git(root, &["config", "submodule.vendor.ignore", "all"]);
 
     fs::write(root.join("vendor/tracked.txt"), "modified\n").unwrap();
-    assert!(is_worktree_dirty(root, &[]));
+    assert!(is_worktree_dirty(root, &Config::empty()));
     git(&root.join("vendor"), &["reset", "--hard", "HEAD"]);
     fs::write(root.join("vendor/untracked.txt"), "user data\n").unwrap();
-    assert!(is_worktree_dirty(root, &[]));
+    assert!(is_worktree_dirty(root, &Config::empty()));
 }
 
 #[test]
 fn dirty_check_fails_closed_on_git_errors() {
     let empty = TempDir::new().unwrap();
-    assert!(is_worktree_dirty(empty.path(), &[]));
+    assert!(is_worktree_dirty(empty.path(), &Config::empty()));
 }
 
 #[test]

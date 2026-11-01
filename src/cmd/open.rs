@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use super::create::{self, CreateOptions};
-use crate::{git, worktree};
+use crate::{config::Config, git, worktree};
 
 pub fn run(
     branch: Option<&str>,
@@ -21,9 +21,9 @@ pub fn run(
     // Config drives worktree resolution and the tool lookup; skip the git
     // spawn when neither needs it (no branch, command fully overridden).
     let waku_config = if branch.is_some() || command_override.is_none() {
-        git::config_get_regexp_in(&root, create::CONFIG_PATTERN)?
+        Config::load(&root)?
     } else {
-        Vec::new()
+        Config::empty()
     };
     let dir = match branch {
         None => std::env::current_dir()?,

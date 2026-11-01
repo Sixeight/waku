@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::git;
+use crate::{config::Config, git};
 
 /// Remove an existing file, symlink, or directory at `path`.
 /// No-op if the path does not exist.
@@ -28,16 +28,12 @@ pub(super) enum WorktreeIncludeMode {
 }
 
 impl WorktreeIncludeMode {
-    pub(super) fn from_config(waku_config: &[(String, String)]) -> Self {
-        waku_config
-            .iter()
-            .find(|(k, _)| k == "waku.worktreeinclude")
-            .map(|(_, v)| match v.as_str() {
-                "link" => Self::Link,
-                "ignore" => Self::Ignore,
-                _ => Self::Copy,
-            })
-            .unwrap_or(Self::Copy)
+    pub(super) fn from_config(waku_config: &Config) -> Self {
+        match waku_config.first("waku.worktreeinclude") {
+            Some("link") => Self::Link,
+            Some("ignore") => Self::Ignore,
+            _ => Self::Copy,
+        }
     }
 }
 
