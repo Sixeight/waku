@@ -87,9 +87,10 @@ fn worktree_branch(root: &Path, wt_path: &Path) -> Option<String> {
 }
 
 /// Resolve a query to a worktree path using pre-loaded waku config.
+/// Accepts: absolute path, branch name, or worktree directory name.
 /// When the branch lives at its conventional path (verified against the
 /// worktree's checked-out branch), this avoids spawning `git worktree list`.
-pub fn resolve_worktree_with_config(root: &Path, query: &str, config: &Config) -> Result<PathBuf> {
+pub fn resolve(root: &Path, query: &str, config: &Config) -> Result<PathBuf> {
     let query_path = PathBuf::from(query);
     if query_path.is_absolute() && query_path.is_dir() {
         return Ok(query_path);
@@ -102,33 +103,10 @@ pub fn resolve_worktree_with_config(root: &Path, query: &str, config: &Config) -
         }
     }
 
-    resolve_worktree_in(root, query)
+    resolve_from_list(query, &git::worktree_list(root)?)
 }
 
-/// Resolve a query to a worktree path.
-/// Accepts: absolute path, branch name, or worktree directory name.
-pub fn resolve_worktree(query: &str) -> Result<PathBuf> {
-    let query_path = PathBuf::from(query);
-
-    // 1. Absolute path — return as-is if it exists
-    if query_path.is_absolute() && query_path.is_dir() {
-        return Ok(query_path);
-    }
-
-    let root = repo_root()?;
-    let config = Config::load(&root)?;
-    resolve_worktree_with_config(&root, query, &config)
-}
-
-fn resolve_worktree_in(root: &Path, query: &str) -> Result<PathBuf> {
-    let worktrees = git::worktree_list(root)?;
-    resolve_worktree_from_list(query, &worktrees)
-}
-
-pub fn resolve_worktree_from_list(
-    query: &str,
-    worktrees: &[(String, Option<String>)],
-) -> Result<PathBuf> {
+pub fn resolve_from_list(query: &str, worktrees: &[(String, Option<String>)]) -> Result<PathBuf> {
     let query_path = PathBuf::from(query);
     if query_path.is_absolute() && query_path.is_dir() {
         return Ok(query_path);
@@ -251,36 +229,35 @@ mod tests {
     }
 
     #[test]
-    fn resolve_worktree_with_config_hits_conventional_path() {
+    fn resolve_hits_conventional_path() {
         let (tmp, root, wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
         let config = config_for(&tmp.path().join("wt"));
-        let resolved = resolve_worktree_with_config(&root, "feature/foo", &config).unwrap();
+        let resolved = resolve(&root, "feature/foo", &config).unwrap();
         // The fast path canonicalizes to match `git worktree list` output.
         assert_eq!(resolved, wt_path.canonicalize().unwrap());
     }
 
     #[test]
-    fn resolve_worktree_with_config_errors_for_foreign_repo_worktree() {
+    fn resolve_errors_for_foreign_repo_worktree() {
         // Two repos share the same worktrees base; the query branch only has a
         // worktree in the OTHER repo. Resolution must not cross repositories.
         let (tmp, _root, _wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
         let other_root = tmp.path().join("other");
         init_repo(&other_root);
         let config = config_for(&tmp.path().join("wt"));
-        assert!(resolve_worktree_with_config(&other_root, "feature/foo", &config).is_err());
+        assert!(resolve(&other_root, "feature/foo", &config).is_err());
     }
 
     #[test]
-    fn resolve_worktree_with_config_accepts_absolute_path_query() {
+    fn resolve_accepts_absolute_path_query() {
         let (tmp, root, wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
         let config = config_for(&tmp.path().join("wt"));
-        let resolved =
-            resolve_worktree_with_config(&root, wt_path.to_str().unwrap(), &config).unwrap();
+        let resolved = resolve(&root, wt_path.to_str().unwrap(), &config).unwrap();
         assert_eq!(resolved, wt_path);
     }
 
     #[test]
-    fn resolve_worktree_with_config_fast_path_spawns_no_git() {
+    fn resolve_fast_path_spawns_no_git() {
         // Hand-crafted worktree layout with NO functioning git repo: the
         // fallback (`git worktree list`) would fail here, so success proves
         // the fast path resolved via file reads alone.
@@ -298,12 +275,12 @@ mod tests {
         .unwrap();
 
         let config = config_for(&tmp.path().join("wt"));
-        let resolved = resolve_worktree_with_config(&root, "feature/foo", &config).unwrap();
+        let resolved = resolve(&root, "feature/foo", &config).unwrap();
         assert_eq!(resolved, wt_path.canonicalize().unwrap());
     }
 
     #[test]
-    fn resolve_worktree_with_config_falls_back_when_dir_has_other_branch() {
+    fn resolve_falls_back_when_dir_has_other_branch() {
         // The worktree lives at a non-conventional path, while the conventional
         // path is occupied by a worktree with a different branch.
         let (tmp, root, wt_path) = init_repo_with_worktree("feature/foo", "elsewhere");
@@ -316,24 +293,24 @@ mod tests {
         assert!(status.success());
 
         let config = config_for(&tmp.path().join("wt"));
-        let resolved = resolve_worktree_with_config(&root, "feature/foo", &config).unwrap();
+        let resolved = resolve(&root, "feature/foo", &config).unwrap();
         // git worktree list reports canonicalized paths (/var → /private/var on macOS)
         assert_eq!(resolved, wt_path.canonicalize().unwrap());
     }
 
     #[test]
-    fn resolve_worktree_with_config_falls_back_to_dir_name_match() {
+    fn resolve_falls_back_to_dir_name_match() {
         let (tmp, root, wt_path) = init_repo_with_worktree("feature/foo", "wt/custom-name");
         let config = config_for(&tmp.path().join("wt"));
-        let resolved = resolve_worktree_with_config(&root, "custom-name", &config).unwrap();
+        let resolved = resolve(&root, "custom-name", &config).unwrap();
         assert_eq!(resolved, wt_path.canonicalize().unwrap());
     }
 
     #[test]
-    fn resolve_worktree_with_config_errors_for_unknown_query() {
+    fn resolve_errors_for_unknown_query() {
         let (tmp, root, _wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
         let config = config_for(&tmp.path().join("wt"));
-        assert!(resolve_worktree_with_config(&root, "nope", &config).is_err());
+        assert!(resolve(&root, "nope", &config).is_err());
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::{config::Config, git, worktree};
 pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
     let root = worktree::repo_root()?;
     let worktrees = git::worktree_list(&root)?;
-    let path = worktree::resolve_worktree_from_list(query, &worktrees)?;
+    let path = worktree::resolve_from_list(query, &worktrees)?;
 
     let path_str = path.to_string_lossy().to_string();
     if path_str == root.to_string_lossy().as_ref() {
