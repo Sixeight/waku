@@ -11,7 +11,10 @@ pub fn repo_root() -> Result<PathBuf> {
 
 /// Get the repository root and the toplevel of the current worktree.
 pub fn repo_root_and_toplevel() -> Result<(PathBuf, PathBuf)> {
-    let output = git::git_output(&["rev-parse", "--git-common-dir", "--show-toplevel"])?;
+    let output = git::git_output_in(
+        Path::new("."),
+        &["rev-parse", "--git-common-dir", "--show-toplevel"],
+    )?;
     let mut lines = output.lines();
     let common_dir = lines.next().context("missing --git-common-dir output")?;
     let toplevel = lines.next().context("missing --show-toplevel output")?;
