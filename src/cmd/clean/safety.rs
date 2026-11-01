@@ -2,12 +2,13 @@ use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 
+use crate::config::Config;
 use crate::git::{self, WorktreeDetails};
 
 pub(super) fn remove_worktree(
     root: &Path,
     expected: &WorktreeDetails,
-    config: &[(String, String)],
+    config: &Config,
     allow_dirty: bool,
 ) -> Result<()> {
     let current = git::worktree_details(root)?
@@ -65,7 +66,7 @@ mod tests {
         let (_dir, root, expected) = fixture();
         let path = Path::new(&expected.path);
         fs::write(path.join("work.txt"), "in progress").unwrap();
-        assert!(remove_worktree(&root, &expected, &[], false).is_err());
+        assert!(remove_worktree(&root, &expected, &Config::empty(), false).is_err());
         assert_eq!(
             fs::read_to_string(path.join("work.txt")).unwrap(),
             "in progress"
@@ -78,7 +79,7 @@ mod tests {
         let (_dir, root, expected) = fixture();
         let path = Path::new(&expected.path);
         git::git_in(path, &["commit", "--allow-empty", "-m", "unmerged work"]).unwrap();
-        assert!(remove_worktree(&root, &expected, &[], true).is_err());
+        assert!(remove_worktree(&root, &expected, &Config::empty(), true).is_err());
         assert!(path.exists());
     }
 
@@ -87,7 +88,7 @@ mod tests {
         let (_dir, root, expected) = fixture();
         let path = Path::new(&expected.path);
         git::git_in(path, &["switch", "-c", "other"]).unwrap();
-        assert!(remove_worktree(&root, &expected, &[], true).is_err());
+        assert!(remove_worktree(&root, &expected, &Config::empty(), true).is_err());
         assert!(path.exists());
     }
 
@@ -95,7 +96,7 @@ mod tests {
     fn configured_artifacts_do_not_prevent_removal() {
         let (_dir, root, expected) = fixture();
         fs::write(Path::new(&expected.path).join("shared.lock"), "artifact").unwrap();
-        let config = vec![("waku.copy.include".into(), "shared.lock".into())];
+        let config = Config::from_entries(vec![("waku.copy.include".into(), "shared.lock".into())]);
         remove_worktree(&root, &expected, &config, false).unwrap();
         assert!(!Path::new(&expected.path).exists());
     }
@@ -104,7 +105,7 @@ mod tests {
     fn explicitly_confirmed_dirty_worktrees_can_be_removed() {
         let (_dir, root, expected) = fixture();
         fs::write(Path::new(&expected.path).join("work.txt"), "confirmed").unwrap();
-        remove_worktree(&root, &expected, &[], true).unwrap();
+        remove_worktree(&root, &expected, &Config::empty(), true).unwrap();
         assert!(!Path::new(&expected.path).exists());
     }
 
@@ -117,7 +118,7 @@ mod tests {
             if staged {
                 git::git_in(path, &["add", "tracked.txt"]).unwrap();
             }
-            assert!(remove_worktree(&root, &expected, &[], false).is_err());
+            assert!(remove_worktree(&root, &expected, &Config::empty(), false).is_err());
             assert_eq!(
                 fs::read_to_string(path.join("tracked.txt")).unwrap(),
                 "in progress\n"
@@ -131,7 +132,7 @@ mod tests {
         git::git_in(&root, &["worktree", "remove", &expected.path]).unwrap();
         fs::create_dir(&expected.path).unwrap();
         fs::write(Path::new(&expected.path).join("work.txt"), "keep").unwrap();
-        assert!(remove_worktree(&root, &expected, &[], true).is_err());
+        assert!(remove_worktree(&root, &expected, &Config::empty(), true).is_err());
         assert!(Path::new(&expected.path).join("work.txt").exists());
     }
 
@@ -139,7 +140,7 @@ mod tests {
     fn missing_head_snapshot_does_not_allow_forced_removal() {
         let (_dir, root, mut expected) = fixture();
         expected.head = None;
-        assert!(remove_worktree(&root, &expected, &[], true).is_err());
+        assert!(remove_worktree(&root, &expected, &Config::empty(), true).is_err());
         assert!(Path::new(&expected.path).exists());
     }
 }

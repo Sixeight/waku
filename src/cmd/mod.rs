@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 
-use crate::git;
+use crate::{config::Config, git};
 
 pub const SPINNER_TEMPLATE: &str = "  {prefix} {msg:.dim}{spinner:.dim}";
 
@@ -102,13 +102,10 @@ pub fn print_warning(context: &str, error: &anyhow::Error) {
 
 /// Resolve the configured command line for a tool, with defaults.
 /// The last matching entry wins, mirroring `git config --get` semantics.
-pub fn resolve_tool(config: &[(String, String)], tool: &str) -> String {
-    let key = format!("waku.command.{tool}");
+pub fn resolve_tool(config: &Config, tool: &str) -> String {
     config
-        .iter()
-        .rev()
-        .find(|(k, _)| k == &key)
-        .map(|(_, v)| v.clone())
+        .last(&format!("waku.command.{tool}"))
+        .map(str::to_string)
         .unwrap_or_else(|| match tool {
             "agent" => "claude".to_string(),
             _ => "nvim".to_string(),
@@ -116,17 +113,14 @@ pub fn resolve_tool(config: &[(String, String)], tool: &str) -> String {
 }
 
 /// Resolve the command and configured arguments for a tool.
-pub fn resolve_tool_command(
-    config: &[(String, String)],
-    tool: &str,
-) -> Result<(String, Vec<String>)> {
+pub fn resolve_tool_command(config: &Config, tool: &str) -> Result<(String, Vec<String>)> {
     let command_line = resolve_tool(config, tool);
     parse_command_line(&command_line)
 }
 
 /// Resolve a command line from pre-loaded config, preferring a one-time override.
 pub fn resolve_tool_command_with_override(
-    config: &[(String, String)],
+    config: &Config,
     tool: &str,
     command_override: Option<&str>,
 ) -> Result<(String, Vec<String>)> {
@@ -187,24 +181,6 @@ fn parse_command_line(command_line: &str) -> Result<(String, Vec<String>)> {
     Ok((program.clone(), args.to_vec()))
 }
 
-/// Extract values for a given config key.
-pub fn config_values<'a>(config: &'a [(String, String)], key: &str) -> Vec<&'a str> {
-    config
-        .iter()
-        .filter(|(k, _)| k == key)
-        .map(|(_, v)| v.as_str())
-        .collect()
-}
-
-pub fn config_bool(config: &[(String, String)], key: &str) -> bool {
-    config
-        .iter()
-        .rev()
-        .find(|(k, _)| k == key)
-        .map(|(_, v)| matches!(v.as_str(), "true" | "yes" | "on" | "1"))
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,17 +222,17 @@ mod tests {
 
     #[test]
     fn resolve_tool_defaults() {
-        let config: Vec<(String, String)> = vec![];
+        let config = Config::empty();
         assert_eq!(resolve_tool(&config, "agent"), "claude");
         assert_eq!(resolve_tool(&config, "editor"), "nvim");
     }
 
     #[test]
     fn resolve_tool_from_config() {
-        let config = vec![
+        let config = Config::from_entries(vec![
             ("waku.command.agent".to_string(), "aider".to_string()),
             ("waku.command.editor".to_string(), "vim".to_string()),
-        ];
+        ]);
         assert_eq!(resolve_tool(&config, "agent"), "aider");
         assert_eq!(resolve_tool(&config, "editor"), "vim");
     }
@@ -265,19 +241,19 @@ mod tests {
     fn resolve_tool_prefers_last_value_like_git_config_get() {
         // git config --get-regexp lists system → global → local in order,
         // and `git config --get` returns the last (most specific) value.
-        let config = vec![
+        let config = Config::from_entries(vec![
             ("waku.command.agent".to_string(), "global-agent".to_string()),
             ("waku.command.agent".to_string(), "local-agent".to_string()),
-        ];
+        ]);
         assert_eq!(resolve_tool(&config, "agent"), "local-agent");
     }
 
     #[test]
     fn resolve_tool_command_splits_configured_arguments() {
-        let config = vec![(
+        let config = Config::from_entries(vec![(
             "waku.command.agent".to_string(),
             "claude --resume --model sonnet".to_string(),
-        )];
+        )]);
         let (program, args) = resolve_tool_command(&config, "agent").unwrap();
         assert_eq!(program, "claude");
         assert_eq!(args, vec!["--resume", "--model", "sonnet"]);
@@ -285,56 +261,13 @@ mod tests {
 
     #[test]
     fn resolve_tool_command_preserves_quoted_arguments() {
-        let config = vec![(
+        let config = Config::from_entries(vec![(
             "waku.command.agent".to_string(),
             "claude --append \"hello world\"".to_string(),
-        )];
+        )]);
         let (program, args) = resolve_tool_command(&config, "agent").unwrap();
         assert_eq!(program, "claude");
         assert_eq!(args, vec!["--append", "hello world"]);
-    }
-
-    #[test]
-    fn config_values_filters_by_key() {
-        let config = vec![
-            ("waku.link.include".to_string(), "node_modules".to_string()),
-            ("waku.copy.include".to_string(), ".env".to_string()),
-            ("waku.link.include".to_string(), ".direnv".to_string()),
-        ];
-        assert_eq!(
-            config_values(&config, "waku.link.include"),
-            vec!["node_modules", ".direnv"]
-        );
-        assert_eq!(config_values(&config, "waku.copy.include"), vec![".env"]);
-    }
-
-    #[test]
-    fn config_values_returns_empty_for_missing_key() {
-        let config = vec![("waku.link.include".to_string(), "node_modules".to_string())];
-        let result: Vec<&str> = config_values(&config, "waku.copy.include");
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn config_values_empty_config() {
-        let config: Vec<(String, String)> = vec![];
-        let result: Vec<&str> = config_values(&config, "waku.link.include");
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn config_bool_reads_last_matching_value() {
-        let config = vec![
-            ("waku.create.fetch".to_string(), "false".to_string()),
-            ("waku.create.fetch".to_string(), "true".to_string()),
-        ];
-        assert!(config_bool(&config, "waku.create.fetch"));
-    }
-
-    #[test]
-    fn config_bool_returns_false_for_missing_key() {
-        let config: Vec<(String, String)> = vec![];
-        assert!(!config_bool(&config, "waku.create.fetch"));
     }
 
     #[test]

@@ -5,8 +5,8 @@ use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use super::{config_bool, spinner};
-use crate::{git, worktree};
+use super::spinner;
+use crate::{config::Config, git, worktree};
 
 mod copy;
 use copy::{
@@ -30,18 +30,16 @@ pub struct CreateOptions {
     pub root: Option<PathBuf>,
 }
 
-pub(super) const CONFIG_PATTERN: &str = r"^(waku\.|checkout\.workers$)";
-
 pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     if let Some(root) = opts.root.clone() {
-        let waku_config = git::config_get_regexp_in(&root, CONFIG_PATTERN)?;
+        let waku_config = Config::load(&root)?;
         return run_with_config(branch, opts, &root, &waku_config, None);
     }
     // Config and refs read from the current directory match the main worktree's
     // when run from it, so all three lookups can start at once.
     let cwd = Path::new(".");
     let (located, config, refs) = std::thread::scope(|s| {
-        let config = s.spawn(|| git::config_get_regexp_in(cwd, CONFIG_PATTERN));
+        let config = s.spawn(|| Config::load(cwd));
         let refs = s.spawn(|| git::branch_refs_exist(cwd, branch));
         (
             worktree::repo_root_and_toplevel(),
@@ -54,7 +52,7 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
         return run_with_config(branch, opts, &root, &config?, refs.ok());
     }
     // Elsewhere (a linked worktree may have its own config), read from the root.
-    let waku_config = git::config_get_regexp_in(&root, CONFIG_PATTERN)?;
+    let waku_config = Config::load(&root)?;
     run_with_config(branch, opts, &root, &waku_config, None)
 }
 
@@ -62,13 +60,13 @@ pub(super) fn run_with_config(
     branch: &str,
     opts: CreateOptions,
     root: &Path,
-    waku_config: &[(String, String)],
+    waku_config: &Config,
     mut branch_refs: Option<(bool, bool)>,
 ) -> Result<PathBuf> {
     let wt_path = worktree::worktree_path_with_config(root, branch, waku_config)?;
-    let fetch = !opts.no_fetch && (opts.fetch || config_bool(waku_config, "waku.create.fetch"));
+    let fetch = !opts.no_fetch && (opts.fetch || waku_config.bool("waku.create.fetch"));
     let from_default_branch = opts.from_default_branch
-        || (opts.from.is_none() && config_bool(waku_config, "waku.create.from-default-branch"));
+        || (opts.from.is_none() && waku_config.bool("waku.create.from-default-branch"));
     let background_fetch = background_fetch_plan(root, branch, &opts, from_default_branch, fetch)?;
 
     if fetch && background_fetch.is_none() {
@@ -125,8 +123,8 @@ pub(super) fn run_with_config(
         create_copies(root, &wt_path, waku_config, opts.quiet)?;
     }
     apply_worktreeinclude(root, &wt_path, wti_mode, wti_files?, opts.quiet)?;
-    if config_bool(waku_config, "waku.hook.postcreate.background")
-        && !super::config_values(waku_config, "waku.hook.postcreate").is_empty()
+    if waku_config.bool("waku.hook.postcreate.background")
+        && !waku_config.values("waku.hook.postcreate").is_empty()
     {
         let log_path = start_background_hooks(&wt_path, waku_config)?;
         if !opts.quiet {
@@ -260,7 +258,7 @@ fn worktree_git_dir(wt_path: &Path) -> Result<PathBuf> {
     Ok(git_dir)
 }
 
-fn start_background_hooks(wt_path: &Path, config: &[(String, String)]) -> Result<PathBuf> {
+fn start_background_hooks(wt_path: &Path, config: &Config) -> Result<PathBuf> {
     let log_path = worktree_git_dir(wt_path)?.join("waku-post-create.log");
     let stdout = fs::File::create(&log_path)
         .with_context(|| format!("failed to create {}", log_path.display()))?;
@@ -272,7 +270,7 @@ fn start_background_hooks(wt_path: &Path, config: &[(String, String)]) -> Result
         .arg("__background-hooks")
         .arg(wt_path)
         .arg("--")
-        .args(super::config_values(config, "waku.hook.postcreate"));
+        .args(config.values("waku.hook.postcreate"));
     command
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
@@ -333,7 +331,7 @@ fn create_worktree(
     branch: &str,
     opts: &CreateOptions,
     from_default_branch: bool,
-    config: &[(String, String)],
+    config: &Config,
     branch_refs: Option<(bool, bool)>,
 ) -> Result<Option<String>> {
     let (from, quiet) = (opts.from.as_deref(), opts.quiet);
@@ -359,7 +357,7 @@ fn create_worktree(
         None => git::branch_refs_exist(root, branch)?,
     };
     let mut add_args = Vec::new();
-    if !config.iter().any(|(key, _)| key == "checkout.workers") {
+    if !config.contains_key("checkout.workers") {
         add_args.extend_from_slice(&["-c", "checkout.workers=8"]);
     }
     add_args.extend_from_slice(&["worktree", "add"]);
@@ -418,13 +416,8 @@ fn create_worktree(
     }
 }
 
-fn create_symlinks(
-    root: &Path,
-    wt_path: &Path,
-    config: &[(String, String)],
-    quiet: bool,
-) -> Result<()> {
-    let includes = super::config_values(config, "waku.link.include");
+fn create_symlinks(root: &Path, wt_path: &Path, config: &Config, quiet: bool) -> Result<()> {
+    let includes = config.values("waku.link.include");
 
     for name in includes {
         let source = root.join(name);
@@ -446,13 +439,8 @@ fn create_symlinks(
     Ok(())
 }
 
-fn create_copies(
-    root: &Path,
-    wt_path: &Path,
-    config: &[(String, String)],
-    quiet: bool,
-) -> Result<()> {
-    let copies = super::config_values(config, "waku.copy.include");
+fn create_copies(root: &Path, wt_path: &Path, config: &Config, quiet: bool) -> Result<()> {
+    let copies = config.values("waku.copy.include");
     let valid: Vec<&str> = copies
         .iter()
         .filter(|name| {
@@ -476,7 +464,8 @@ fn create_copies(
         return Ok(());
     }
 
-    let excludes: Vec<PathBuf> = super::config_values(config, "waku.copy.exclude")
+    let excludes: Vec<PathBuf> = config
+        .values("waku.copy.exclude")
         .into_iter()
         .map(|v| root.join(v.trim_end_matches('/')))
         .collect();
@@ -520,8 +509,8 @@ fn apply_worktreeinclude(
     Ok(())
 }
 
-fn run_post_create_hooks(wt_path: &Path, config: &[(String, String)], quiet: bool) -> Result<()> {
-    let hooks = super::config_values(config, "waku.hook.postcreate");
+fn run_post_create_hooks(wt_path: &Path, config: &Config, quiet: bool) -> Result<()> {
+    let hooks = config.values("waku.hook.postcreate");
     run_hooks(wt_path, &hooks, quiet)
 }
 

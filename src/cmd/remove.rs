@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{bail, Result};
 
 use super::{cleanup_empty_dirs, print_warning, spinner};
-use crate::{git, worktree};
+use crate::{config::Config, git, worktree};
 
 pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
     let root = worktree::repo_root()?;
@@ -21,7 +21,7 @@ pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
         .find(|(p, _)| p == &path_str)
         .and_then(|(_, b)| b.clone());
 
-    let waku_config = git::config_get_regexp_in(&root, r"^waku\.")?;
+    let waku_config = Config::load(&root)?;
 
     // Waku artifacts are expected to differ from the checked-out revision.
     if !force && is_worktree_dirty(&path, &waku_config) {
@@ -76,10 +76,11 @@ pub fn run(query: &str, force: bool, keep_branch: bool) -> Result<()> {
 
 /// Check if a worktree has real modifications, ignoring waku artifacts.
 /// Returns `true` (dirty) when git commands fail, to avoid accidental data loss.
-pub fn is_worktree_dirty(path: &Path, config: &[(String, String)]) -> bool {
-    let waku_entries: HashSet<&str> = super::config_values(config, "waku.link.include")
+pub fn is_worktree_dirty(path: &Path, config: &Config) -> bool {
+    let waku_entries: HashSet<&str> = config
+        .values("waku.link.include")
         .into_iter()
-        .chain(super::config_values(config, "waku.copy.include"))
+        .chain(config.values("waku.copy.include"))
         .collect();
     let waku_prefixes: Vec<String> = waku_entries.iter().map(|e| format!("{e}/")).collect();
 
