@@ -387,7 +387,7 @@ impl Drop for RestoreMode {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod pty {
     use super::*;
-    use std::ffi::CStr;
+    use std::ffi::{c_char, CStr};
     use std::io::ErrorKind;
     use std::os::fd::{FromRawFd, OwnedFd};
 
@@ -415,7 +415,7 @@ mod pty {
         fn openpty(
             amaster: *mut i32,
             aslave: *mut i32,
-            name: *mut i8,
+            name: *mut c_char,
             termp: *const u8,
             winp: *const Winsize,
         ) -> i32;
@@ -435,7 +435,7 @@ mod pty {
     fn open_pty(rows: u16, cols: u16) -> Pty {
         let mut master = -1;
         let mut slave = -1;
-        let mut name = [0i8; 256];
+        let mut name: [c_char; 256] = [0; 256];
         let win = Winsize {
             ws_row: rows,
             ws_col: cols,
