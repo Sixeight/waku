@@ -1,8 +1,27 @@
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
 use crate::{config::Config, git};
+
+#[derive(Debug)]
+pub(crate) struct AmbiguousWorktree {
+    query: String,
+    paths: Vec<String>,
+}
+
+impl fmt::Display for AmbiguousWorktree {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "multiple worktrees match '{}':", self.query)?;
+        for path in &self.paths {
+            write!(f, "\n  {path}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for AmbiguousWorktree {}
 
 /// Get the repository root (toplevel of the main worktree).
 pub fn repo_root() -> Result<PathBuf> {
@@ -124,13 +143,28 @@ pub fn resolve_from_list(query: &str, worktrees: &[(String, Option<String>)]) ->
         }
     }
 
-    // 3. Worktree directory name match
+    // 3. Worktree directory name match.
+    let mut dir_matches = Vec::new();
     for (path, _) in worktrees {
         let p = PathBuf::from(path);
-        if let Some(name) = p.file_name() {
-            if name.to_string_lossy() == query {
-                return Ok(p);
+        if p.file_name()
+            .is_some_and(|name| name.to_string_lossy() == query)
+        {
+            dir_matches.push(p);
+        }
+    }
+    match dir_matches.as_slice() {
+        [] => {}
+        [one] => return Ok(one.clone()),
+        _ => {
+            return Err(AmbiguousWorktree {
+                query: query.to_string(),
+                paths: dir_matches
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect(),
             }
+            .into());
         }
     }
 
@@ -314,6 +348,50 @@ mod tests {
         let (tmp, root, _wt_path) = init_repo_with_worktree("feature/foo", "wt/feature-foo");
         let config = config_for(&tmp.path().join("wt"));
         assert!(resolve(&root, "nope", &config).is_err());
+    }
+
+    #[test]
+    fn resolve_from_list_accepts_a_unique_directory_name() {
+        let worktrees = vec![
+            ("/wt/a/same".to_string(), Some("branch-a".to_string())),
+            ("/wt/b/other".to_string(), Some("branch-b".to_string())),
+        ];
+        let path = resolve_from_list("same", &worktrees).unwrap();
+        assert_eq!(path, PathBuf::from("/wt/a/same"));
+    }
+
+    #[test]
+    fn resolve_from_list_prefers_exact_branch_over_directory_names() {
+        let worktrees = vec![
+            ("/wt/a/same".to_string(), Some("branch-a".to_string())),
+            ("/wt/literal".to_string(), Some("same".to_string())),
+            ("/wt/b/same".to_string(), Some("branch-b".to_string())),
+        ];
+        let path = resolve_from_list("same", &worktrees).unwrap();
+        assert_eq!(path, PathBuf::from("/wt/literal"));
+    }
+
+    #[test]
+    fn resolve_from_list_rejects_duplicate_directory_names() {
+        let worktrees = vec![
+            ("/wt/a/same".to_string(), Some("branch-a".to_string())),
+            ("/wt/b/same".to_string(), None),
+            ("/wt/c/same".to_string(), Some("branch-c".to_string())),
+        ];
+        let err = resolve_from_list("same", &worktrees).unwrap_err();
+        let ambiguous = err.downcast_ref::<AmbiguousWorktree>().unwrap();
+        assert_eq!(ambiguous.query, "same");
+        assert_eq!(
+            ambiguous.paths,
+            vec![
+                "/wt/a/same".to_string(),
+                "/wt/b/same".to_string(),
+                "/wt/c/same".to_string(),
+            ]
+        );
+        let message = err.to_string();
+        assert!(message.contains("multiple worktrees match 'same'"));
+        assert!(message.contains("/wt/b/same"));
     }
 
     #[test]

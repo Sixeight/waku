@@ -377,11 +377,13 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     };
 
     if dry_run {
-        let layout = table_layout(
-            &to_remove,
-            &annotations,
-            usize::from(Term::stdout().size().1).saturating_sub(4),
-        );
+        let stdout = Term::stdout();
+        let row_width = if stdout.is_term() {
+            usize::from(stdout.size().1).saturating_sub(4)
+        } else {
+            usize::MAX
+        };
+        let layout = table_layout(&to_remove, &annotations, row_width);
         println!("{}", candidate_title(layout.row_width));
         println!("  {}", table_header(&layout));
         for (path, branch) in &to_remove {
@@ -430,6 +432,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     // process per worktree.
     let total = selected.len();
     let mut removed_worktrees = Vec::new();
+    let mut failed = 0usize;
     for (index, (path, branch)) in selected.into_iter().enumerate() {
         let name = display_name(&path, branch.as_deref());
         let progress = format!("{name} ({}/{total})", index + 1);
@@ -451,6 +454,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         match result {
             Ok(_) => removed_worktrees.push((progress, branch)),
             Err(e) => {
+                failed += 1;
                 eprintln!(
                     "  {} Failed to remove {}",
                     style("✘").red().bold(),
@@ -475,6 +479,7 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
         failures
     };
 
+    let removed = removed_worktrees.len();
     for (progress, branch) in removed_worktrees {
         if let Some(branch) = branch {
             if let Some(failure) = branch_failures.get(&branch) {
@@ -498,6 +503,10 @@ pub fn run(dry_run: bool, yes: bool, force: bool) -> Result<()> {
     let base = worktree::worktrees_base_with_config(&root, &waku_config)?;
     if base.exists() {
         cleanup_empty_dirs(&base)?;
+    }
+
+    if failed > 0 {
+        anyhow::bail!("Removed {removed} of {total}. {failed} failed.");
     }
 
     Ok(())
@@ -590,6 +599,11 @@ fn select_worktrees(
     check_refs: &[String],
 ) -> Result<Vec<(String, Option<String>)>> {
     let term = Term::stderr();
+    if !term.is_term() {
+        anyhow::bail!(
+            "clean needs a terminal to choose worktrees; pass --yes to remove the default selection, or --dry-run to preview it"
+        );
+    }
     let count = items.len();
     let mut checked: Vec<bool> = items
         .iter()
@@ -604,7 +618,7 @@ fn select_worktrees(
         display.draw(&term, &checked, cursor, selected_count)?;
         loop {
             let previous_cursor = cursor;
-            match term.read_key()? {
+            match term.read_key_raw()? {
                 Key::ArrowUp | Key::Char('k') if cursor > 0 => cursor -= 1,
                 Key::ArrowDown | Key::Char('j') if cursor < count => cursor += 1,
                 Key::Char(' ')
@@ -647,7 +661,12 @@ fn select_worktrees(
                     term.clear_last_lines(display.line_count())?;
                     break Ok(vec![]);
                 }
-                Key::CtrlC => anyhow::bail!("cancelled; no selected deletions were applied"),
+                Key::CtrlC => {
+                    let _ = term.clear_last_lines(display.line_count());
+                    let _ = term.show_cursor();
+                    eprintln!("cancelled; no selected deletions were applied");
+                    std::process::exit(130);
+                }
                 _ => continue,
             }
             display.update(
