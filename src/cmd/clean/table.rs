@@ -274,4 +274,39 @@ mod tests {
         assert!(measure_text_width(&narrow_row) <= 50);
         assert!(strip_ansi_codes(&narrow_row).contains("2 unique"));
     }
+
+    #[test]
+    fn unlimited_width_keeps_a_long_branch_name() {
+        let path = "/tmp/worktrees/long";
+        let branch = format!("feature-{}", "n".repeat(80));
+        let items = vec![(path.to_string(), Some(branch.clone()))];
+        let commits = HashMap::from([(
+            path.to_string(),
+            CommitInfo {
+                updated: "1 second ago".to_string(),
+                subject: "add feature".to_string(),
+            },
+        )]);
+        let annotations = WorktreeAnnotations {
+            protected: &HashMap::new(),
+            dirty: &HashSet::new(),
+            unchanged: &HashSet::new(),
+            gone: &HashSet::new(),
+            commits: &commits,
+            unique_commits: &HashMap::new(),
+            force: false,
+        };
+
+        let wide = table_layout(&items, &annotations, usize::MAX);
+        let wide_row = worktree_row(path, Some(&branch), &annotations, &wide, true);
+        let wide_row = strip_ansi_codes(&wide_row);
+        assert!(wide_row.contains(&branch), "{wide_row}");
+        assert!(!wide_row.contains('…'), "{wide_row}");
+
+        let narrow = table_layout(&items, &annotations, 40);
+        let narrow_row = worktree_row(path, Some(&branch), &annotations, &narrow, true);
+        let narrow_row = strip_ansi_codes(&narrow_row);
+        assert!(!narrow_row.contains(&branch), "{narrow_row}");
+        assert!(narrow_row.contains('…'), "{narrow_row}");
+    }
 }

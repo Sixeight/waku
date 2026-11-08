@@ -29,6 +29,7 @@ pub fn run(
         None => std::env::current_dir()?,
         Some(b) => match worktree::resolve(&root, b, &waku_config) {
             Ok(dir) => dir,
+            Err(err) if err.is::<worktree::AmbiguousWorktree>() => return Err(err),
             Err(_) => create::run_with_config(
                 b,
                 CreateOptions {
