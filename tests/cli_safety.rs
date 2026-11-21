@@ -23,6 +23,8 @@ fn setup_repo() -> (TempDir, PathBuf) {
 fn run_git(dir: &Path, args: &[&str]) {
     let output = Command::new("git")
         .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(dir)
         .output()
         .expect("git");
@@ -43,6 +45,8 @@ fn git_waku_bin() -> PathBuf {
 fn run_waku(dir: &Path, args: &[&str]) -> Output {
     Command::new(git_waku_bin())
         .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(dir)
         .output()
         .expect("git-waku")
@@ -51,6 +55,8 @@ fn run_waku(dir: &Path, args: &[&str]) -> Output {
 fn output_within(dir: &Path, args: &[&str], timeout: Duration) -> Output {
     let mut child = Command::new(git_waku_bin())
         .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -306,6 +312,8 @@ fn clean_reports_partial_deletion_failure_from_git() {
 
     let output = Command::new(git_waku_bin())
         .args(["clean", "--yes"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(&repo)
         .env("PATH", path)
         .output()
@@ -520,7 +528,11 @@ mod pty {
         let stdout_path = dir.join(".waku-stdout");
         let stderr_is_pty = key.is_some();
         let mut child = Command::new(git_waku_bin());
-        child.args(args).current_dir(dir);
+        child
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .current_dir(dir);
         if stderr_is_pty {
             let stdin = pty.slave.try_clone().unwrap();
             let stderr = pty.slave.try_clone().unwrap();

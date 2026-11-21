@@ -17,6 +17,8 @@ fn git(root: &Path, args: &[&str]) {
             "commit.gpgsign=false",
         ])
         .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(root)
         .output()
         .unwrap();
@@ -233,6 +235,8 @@ fn remove_keeps_dirty_worktrees_when_pathspec_environment_changes_matching() {
         fs::write(worktree.join("artifacts/tracked.txt"), "user data\n").unwrap();
         let output = Command::new(env!("CARGO_BIN_EXE_git-waku"))
             .args(["remove", worktree.to_str().unwrap(), "--keep-branch"])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
             .current_dir(root)
             .env(variable, "1")
             .output()

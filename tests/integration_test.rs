@@ -63,6 +63,8 @@ fn setup_repo() -> (TempDir, PathBuf) {
 fn run_git(dir: &Path, args: &[&str]) {
     let status = Command::new("git")
         .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(dir)
         .output()
         .expect("failed to run git");
@@ -81,6 +83,8 @@ fn git_waku_bin() -> PathBuf {
 fn run_waku(dir: &Path, args: &[&str]) -> std::process::Output {
     Command::new(git_waku_bin())
         .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(dir)
         .output()
         .expect("failed to run git-waku")
@@ -276,6 +280,8 @@ fn clean_keeps_worktrees_when_agent_inspection_is_unavailable() {
     let output = Command::new(git_waku_bin())
         .args(["clean", "--yes", "--force"])
         .env("PATH", &tools)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -308,6 +314,8 @@ fn create_cd_starts_shell_in_worktree() {
     let output = Command::new(git_waku_bin())
         .args(["create", "feature-cd-shell", "--cd"])
         .env("SHELL", "/bin/pwd")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(&repo)
         .output()
         .expect("failed to run git-waku");
@@ -440,6 +448,8 @@ fn create_returns_before_background_post_create_hook_finishes() {
 
     let mut child = Command::new(git_waku_bin())
         .args(["create", "feature-background-hook", "--no-fetch"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(&repo)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -479,11 +489,13 @@ fn create_quiet_suppresses_hook_output() {
         &repo,
         &["config", "waku.hook.postCreate", "echo HOOK_STDOUT_MARKER"],
     );
+    run_git(&repo, &["config", "waku.create.from-default-branch", "false"]);
 
     let result = git_waku::cmd::create::run(
         "feature-quiet-hook",
         git_waku::cmd::create::CreateOptions {
             quiet: true,
+            no_fetch: true,
             root: Some(repo.clone()),
             ..Default::default()
         },
@@ -2182,11 +2194,13 @@ fn remove_cleans_up_worktreeinclude_copies() {
 #[test]
 fn create_run_returns_worktree_path() {
     let (_tmp, repo) = setup_repo();
+    run_git(&repo, &["config", "waku.create.from-default-branch", "false"]);
 
     let result = git_waku::cmd::create::run(
         "feature-api-path",
         git_waku::cmd::create::CreateOptions {
             quiet: true,
+            no_fetch: true,
             root: Some(repo.clone()),
             ..Default::default()
         },
@@ -3051,6 +3065,8 @@ fn config_adds_multi_value() {
 
     let values = Command::new("git")
         .args(["config", "--get-all", "waku.link.include"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .current_dir(&repo)
         .output()
         .unwrap();
