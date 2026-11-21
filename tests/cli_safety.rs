@@ -395,7 +395,7 @@ impl Drop for RestoreMode {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod pty {
     use super::*;
-    use std::ffi::{c_char, CStr};
+    use std::ffi::{c_char, c_int, c_ulong, CStr};
     use std::io::ErrorKind;
     use std::os::fd::{FromRawFd, OwnedFd};
 
@@ -408,30 +408,30 @@ mod pty {
     }
 
     #[cfg(target_os = "linux")]
-    const TIOCSWINSZ: u64 = 0x5414;
+    const TIOCSWINSZ: c_ulong = 0x5414;
     #[cfg(target_os = "macos")]
-    const TIOCSWINSZ: u64 = 0x80087467;
-    const F_GETFL: i32 = 3;
-    const F_SETFL: i32 = 4;
+    const TIOCSWINSZ: c_ulong = 0x80087467;
+    const F_GETFL: c_int = 3;
+    const F_SETFL: c_int = 4;
     #[cfg(target_os = "linux")]
-    const O_NONBLOCK: i32 = 0o4000;
+    const O_NONBLOCK: c_int = 0o4000;
     #[cfg(target_os = "macos")]
-    const O_NONBLOCK: i32 = 0x4;
+    const O_NONBLOCK: c_int = 0x4;
 
     #[link(name = "util")]
     extern "C" {
         fn openpty(
-            amaster: *mut i32,
-            aslave: *mut i32,
+            amaster: *mut c_int,
+            aslave: *mut c_int,
             name: *mut c_char,
             termp: *const u8,
             winp: *const Winsize,
-        ) -> i32;
+        ) -> c_int;
     }
 
     extern "C" {
-        fn fcntl(fd: i32, cmd: i32, arg: i32) -> i32;
-        fn ioctl(fd: i32, request: u64, arg: *const Winsize) -> i32;
+        fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
+        fn ioctl(fd: c_int, request: c_ulong, ...) -> c_int;
     }
 
     struct Pty {
@@ -461,10 +461,24 @@ mod pty {
         };
         assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
         unsafe {
-            assert_eq!(ioctl(slave, TIOCSWINSZ, &win), 0);
-            let flags = fcntl(master, F_GETFL, 0);
-            assert!(flags >= 0, "fcntl: {}", std::io::Error::last_os_error());
-            assert_eq!(fcntl(master, F_SETFL, flags | O_NONBLOCK), 0);
+            assert_eq!(
+                ioctl(slave, TIOCSWINSZ, &win as *const Winsize),
+                0,
+                "ioctl(TIOCSWINSZ): {}",
+                std::io::Error::last_os_error()
+            );
+            let flags = fcntl(master, F_GETFL);
+            assert!(
+                flags >= 0,
+                "fcntl(F_GETFL): {}",
+                std::io::Error::last_os_error()
+            );
+            assert_eq!(
+                fcntl(master, F_SETFL, flags | O_NONBLOCK),
+                0,
+                "fcntl(F_SETFL): {}",
+                std::io::Error::last_os_error()
+            );
         }
         let name = unsafe { CStr::from_ptr(name.as_ptr()) }
             .to_string_lossy()
