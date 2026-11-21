@@ -1,15 +1,23 @@
 use anyhow::{Context, Result};
 use console::style;
+use std::collections::HashSet;
 use std::fs;
+use std::io;
 use std::os::unix::fs as unix_fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::spinner;
 use crate::{config::Config, git, worktree};
 
 mod copy;
-use copy::{collect_worktreeinclude_files, copy_entries, remove_existing, WorktreeIncludeMode};
+use copy::{
+    collect_worktreeinclude_files, copy_entries, copy_entries_to, copy_recursive, remove_existing,
+    CopyTarget, WorktreeIncludeMode,
+};
+
+static STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 pub struct CreateOptions {
@@ -33,6 +41,10 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
         return run_with_config(branch, opts, &root, &waku_config, None);
     }
     if let Some((root, _toplevel)) = worktree::try_repo_root_and_toplevel_fast() {
+        if let Some(config) = Config::try_load_fast(&root) {
+            let refs = git::branch_refs_exist(&root, branch).ok();
+            return run_with_config(branch, opts, &root, &config, refs);
+        }
         let (config, refs) = std::thread::scope(|s| {
             let config = s.spawn(|| Config::load(&root));
             let refs = s.spawn(|| git::branch_refs_exist(&root, branch));
@@ -96,13 +108,119 @@ pub(super) fn run_with_config(
     }
 
     let wti_mode = WorktreeIncludeMode::from_config(waku_config);
-    let (wt_result, wti_files) = std::thread::scope(|s| {
-        let wti_handle = s.spawn(|| {
-            if wti_mode == WorktreeIncludeMode::Ignore {
-                return Ok(vec![]);
+    let has_wti_file =
+        wti_mode != WorktreeIncludeMode::Ignore && root.join(".worktreeinclude").exists();
+    let (copy_valid, copy_missing, copy_excludes) = if !opts.copy_from_base {
+        prepare_copy_entries(root, waku_config)
+    } else {
+        (Vec::new(), Vec::new(), Vec::new())
+    };
+    let can_stage = !wt_path.exists()
+        && (!copy_valid.is_empty() || (has_wti_file && wti_mode == WorktreeIncludeMode::Copy));
+    let stage_dir = if can_stage {
+        StagingDir::create_sibling(&wt_path)
+    } else {
+        None
+    };
+
+    let (wt_result, wti_files, staged_copies, staged_wti) = if let Some(ref stage) = stage_dir {
+        std::thread::scope(|s| {
+            let stage_path = stage.path();
+            let copy_valid_ref = &copy_valid;
+            let copy_excludes_ref = &copy_excludes;
+            let bg_handle = s.spawn(move || {
+                let (staged_copies, wti_files) = if has_wti_file && !copy_valid_ref.is_empty() {
+                    std::thread::scope(|inner| {
+                        let wti_h = inner.spawn(|| collect_worktreeinclude_files(root));
+                        let copies = stage_copy_entries(
+                            root,
+                            stage_path,
+                            "c",
+                            copy_valid_ref,
+                            copy_excludes_ref,
+                        );
+                        (Some(copies), wti_h.join().unwrap())
+                    })
+                } else if !copy_valid_ref.is_empty() {
+                    (
+                        Some(stage_copy_entries(
+                            root,
+                            stage_path,
+                            "c",
+                            copy_valid_ref,
+                            copy_excludes_ref,
+                        )),
+                        Ok(Vec::new()),
+                    )
+                } else if has_wti_file {
+                    (None, collect_worktreeinclude_files(root))
+                } else {
+                    (None, Ok(Vec::new()))
+                };
+
+                let staged_wti = match &wti_files {
+                    Ok(files) if wti_mode == WorktreeIncludeMode::Copy && !files.is_empty() => {
+                        let names: Vec<&str> = files
+                            .iter()
+                            .map(|p| p.to_str().unwrap_or_default())
+                            .collect();
+                        Some(stage_copy_entries(root, stage_path, "w", &names, &[]))
+                    }
+                    _ => None,
+                };
+                (wti_files, staged_copies, staged_wti)
+            });
+
+            let wt_result = create_worktree(
+                root,
+                &wt_path,
+                branch,
+                &opts,
+                from_default_branch,
+                default_branch_ref,
+                waku_config,
+                branch_refs,
+            );
+
+            let sp = if !opts.quiet && !bg_handle.is_finished() {
+                Some(spinner("Copying files".to_string()))
+            } else {
+                None
+            };
+            let (wti_files, staged_copies, staged_wti) = bg_handle.join().unwrap();
+            if let Some(sp) = sp {
+                sp.finish_and_clear();
             }
-            collect_worktreeinclude_files(root)
-        });
+
+            (wt_result, wti_files, staged_copies, staged_wti)
+        })
+    } else if has_wti_file {
+        std::thread::scope(|s| {
+            let wti_handle = s.spawn(|| collect_worktreeinclude_files(root));
+            let wt_result = create_worktree(
+                root,
+                &wt_path,
+                branch,
+                &opts,
+                from_default_branch,
+                default_branch_ref,
+                waku_config,
+                branch_refs,
+            );
+
+            let sp = if !opts.quiet && !wti_handle.is_finished() {
+                Some(spinner("Collecting files".to_string()))
+            } else {
+                None
+            };
+            let wti_files = wti_handle.join().unwrap();
+            if let Some(sp) = sp {
+                sp.finish_and_clear();
+            }
+
+            (wt_result, wti_files, None, None)
+        })
+    } else {
         let wt_result = create_worktree(
             root,
             &wt_path,
@@ -113,36 +231,55 @@ pub(super) fn run_with_config(
             waku_config,
             branch_refs,
         );
-
-        let sp = if !opts.quiet && !wti_handle.is_finished() {
-            Some(spinner("Collecting files".to_string()))
-        } else {
-            None
-        };
-        let wti_files = wti_handle.join().unwrap();
-        if let Some(sp) = sp {
-            sp.finish_and_clear();
-        }
-
-        (wt_result, wti_files)
-    });
+        (wt_result, Ok(Vec::new()), None, None)
+    };
     let wt_created = wt_result?;
 
     let linked_any = create_symlinks(root, &wt_path, waku_config, opts.quiet)?;
     let copied_any = if !opts.copy_from_base {
-        create_copies(root, &wt_path, waku_config, opts.quiet)?
+        if !opts.quiet {
+            for missing in &copy_missing {
+                eprintln!(
+                    "  {} Copy source not found: {}",
+                    style("⚠").yellow(),
+                    style(root.join(missing).display()).dim(),
+                );
+            }
+        }
+        if let Some(staged) = staged_copies {
+            install_staged_entries(&wt_path, staged, true, opts.quiet);
+            !copy_valid.is_empty()
+        } else if !copy_valid.is_empty() {
+            copy_entries_parallel(
+                root,
+                &wt_path,
+                &copy_valid,
+                &copy_excludes,
+                true,
+                opts.quiet,
+            );
+            true
+        } else {
+            false
+        }
     } else {
         false
     };
     let wti_remove_first = !wt_created.newly_created || linked_any || copied_any;
-    apply_worktreeinclude(
-        root,
-        &wt_path,
-        wti_mode,
-        wti_files?,
-        wti_remove_first,
-        opts.quiet,
-    )?;
+    let wti_files = wti_files?;
+    if let Some(staged) = staged_wti {
+        install_staged_entries(&wt_path, staged, wti_remove_first, opts.quiet);
+    } else {
+        apply_worktreeinclude(
+            root,
+            &wt_path,
+            wti_mode,
+            wti_files,
+            wti_remove_first,
+            opts.quiet,
+        )?;
+    }
+    drop(stage_dir);
     if waku_config.bool("waku.hook.postcreate.background")
         && !waku_config.values("waku.hook.postcreate").is_empty()
     {
@@ -544,39 +681,177 @@ fn create_symlinks(root: &Path, wt_path: &Path, config: &Config, quiet: bool) ->
     Ok(linked_any)
 }
 
-fn create_copies(root: &Path, wt_path: &Path, config: &Config, quiet: bool) -> Result<bool> {
+fn prepare_copy_entries<'a>(
+    root: &Path,
+    config: &'a Config,
+) -> (Vec<&'a str>, Vec<&'a str>, Vec<PathBuf>) {
     let copies = config.values("waku.copy.include");
-    let valid: Vec<&str> = copies
-        .iter()
-        .filter(|name| {
-            let source = root.join(name);
-            if source.exists() {
-                return true;
-            }
-            if !quiet {
-                eprintln!(
-                    "  {} Copy source not found: {}",
-                    style("⚠").yellow(),
-                    style(source.display()).dim(),
-                );
-            }
-            false
-        })
-        .copied()
-        .collect();
+    let mut valid = Vec::new();
+    let mut missing = Vec::new();
+    for name in copies {
+        if root.join(name).exists() {
+            valid.push(name);
+        } else {
+            missing.push(name);
+        }
+    }
+    let excludes = if valid.is_empty() {
+        Vec::new()
+    } else {
+        config
+            .values("waku.copy.exclude")
+            .into_iter()
+            .map(|v| root.join(v.trim_end_matches('/')))
+            .collect()
+    };
+    (valid, missing, excludes)
+}
 
-    if valid.is_empty() {
-        return Ok(false);
+struct StagingDir {
+    path: PathBuf,
+    created_parent: Option<PathBuf>,
+}
+
+impl StagingDir {
+    fn create_sibling(wt_path: &Path) -> Option<Self> {
+        let parent = wt_path.parent()?;
+        let parent_existed = parent.exists();
+        fs::create_dir_all(parent).ok()?;
+        let created_parent = (!parent_existed).then(|| parent.to_path_buf());
+        let pid = std::process::id();
+        for _ in 0..32 {
+            let seq = STAGE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let candidate = parent.join(format!(".waku-staging-{pid}-{seq}"));
+            match fs::create_dir(&candidate) {
+                Ok(()) => {
+                    return Some(Self {
+                        path: candidate,
+                        created_parent,
+                    });
+                }
+                Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(_) => {
+                    if let Some(dir) = created_parent {
+                        let _ = fs::remove_dir(dir);
+                    }
+                    return None;
+                }
+            }
+        }
+        if let Some(dir) = created_parent {
+            let _ = fs::remove_dir(dir);
+        }
+        None
     }
 
-    let excludes: Vec<PathBuf> = config
-        .values("waku.copy.exclude")
-        .into_iter()
-        .map(|v| root.join(v.trim_end_matches('/')))
-        .collect();
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
 
-    copy_entries_parallel(root, wt_path, &valid, &excludes, true, quiet);
-    Ok(true)
+impl Drop for StagingDir {
+    fn drop(&mut self) {
+        if self.path.exists() {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+        if let Some(parent) = &self.created_parent {
+            // Only removes if empty (e.g. when `git worktree add` failed).
+            let _ = fs::remove_dir(parent);
+        }
+    }
+}
+
+struct StagedEntry {
+    name: String,
+    staged_path: PathBuf,
+    result: Result<()>,
+}
+
+fn stage_copy_entries(
+    root: &Path,
+    stage_dir: &Path,
+    prefix: &str,
+    names: &[&str],
+    excludes: &[PathBuf],
+) -> Vec<StagedEntry> {
+    let targets: Vec<CopyTarget<'_>> = if names.len() <= 64 {
+        names
+            .iter()
+            .enumerate()
+            .map(|(idx, &name)| CopyTarget {
+                name,
+                src: root.join(name),
+                dst: stage_dir.join(format!("{prefix}-{idx}")),
+            })
+            .collect()
+    } else {
+        let base = stage_dir.join(prefix);
+        names
+            .iter()
+            .map(|&name| CopyTarget {
+                name,
+                src: root.join(name),
+                dst: base.join(name),
+            })
+            .collect()
+    };
+
+    let results = copy_entries_to(&targets, excludes, false);
+    targets
+        .into_iter()
+        .zip(results)
+        .map(|(target, (_, result))| StagedEntry {
+            name: target.name.to_string(),
+            staged_path: target.dst,
+            result,
+        })
+        .collect()
+}
+
+fn install_staged_entries(
+    wt_path: &Path,
+    entries: Vec<StagedEntry>,
+    remove_first: bool,
+    quiet: bool,
+) {
+    let mut ensured_parents: HashSet<PathBuf> = HashSet::new();
+    for entry in entries {
+        let final_result = entry.result.and_then(|()| {
+            let target = wt_path.join(&entry.name);
+            if remove_first {
+                remove_existing(&target)?;
+            }
+            // Excluded top-level entries succeed without producing a staged artifact.
+            if !entry.staged_path.exists() && !entry.staged_path.is_symlink() {
+                return Ok(());
+            }
+            if let Some(parent) = target.parent() {
+                if !ensured_parents.contains(parent) {
+                    fs::create_dir_all(parent)?;
+                    ensured_parents.insert(parent.to_path_buf());
+                }
+            }
+            match fs::rename(&entry.staged_path, &target) {
+                Ok(()) => Ok(()),
+                Err(_) => copy_recursive(&entry.staged_path, &target, &[]),
+            }
+        });
+        if !quiet {
+            match final_result {
+                Ok(()) => {
+                    eprintln!("  {} Copied {}", style("✔").green(), entry.name);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "  {} Failed to copy {}: {}",
+                        style("✘").red().bold(),
+                        entry.name,
+                        e
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn apply_worktreeinclude(
