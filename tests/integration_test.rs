@@ -249,7 +249,7 @@ fn clean_keeps_worktrees_used_by_an_agent_even_with_force() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 fn clean_keeps_worktrees_when_agent_inspection_is_unavailable() {
     use std::os::unix::fs::symlink;
 

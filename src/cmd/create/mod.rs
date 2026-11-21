@@ -9,10 +9,7 @@ use super::spinner;
 use crate::{config::Config, git, worktree};
 
 mod copy;
-use copy::{
-    collect_worktreeinclude_files, copy_recursive, copy_recursive_parallel, remove_existing,
-    WorktreeIncludeMode,
-};
+use copy::{collect_worktreeinclude_files, copy_entries, remove_existing, WorktreeIncludeMode};
 
 #[derive(Default)]
 pub struct CreateOptions {
@@ -35,7 +32,16 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
         let waku_config = Config::load(&root)?;
         return run_with_config(branch, opts, &root, &waku_config, None);
     }
-    // Config and refs read from the current directory match the main worktree's
+    if let Some((root, _toplevel)) = worktree::try_repo_root_and_toplevel_fast() {
+        let (config, refs) = std::thread::scope(|s| {
+            let config = s.spawn(|| Config::load(&root));
+            let refs = s.spawn(|| git::branch_refs_exist(&root, branch));
+            (config.join().unwrap(), refs.join().unwrap())
+        });
+        return run_with_config(branch, opts, &root, &config?, refs.ok());
+    }
+    // Fallback when git env overrides require `git rev-parse`:
+    // config and refs read from the current directory match the main worktree's
     // when run from it, so all three lookups can start at once.
     let cwd = Path::new(".");
     let (located, config, refs) = std::thread::scope(|s| {
@@ -51,9 +57,10 @@ pub fn run(branch: &str, opts: CreateOptions) -> Result<PathBuf> {
     if toplevel == root {
         return run_with_config(branch, opts, &root, &config?, refs.ok());
     }
-    // Elsewhere (a linked worktree may have its own config), read from the root.
+    // Elsewhere (a linked worktree may have its own config), read config from the root.
+    // Branch refs live in the common git dir and are identical across all worktrees.
     let waku_config = Config::load(&root)?;
-    run_with_config(branch, opts, &root, &waku_config, None)
+    run_with_config(branch, opts, &root, &waku_config, refs.ok())
 }
 
 pub(super) fn run_with_config(
@@ -67,7 +74,8 @@ pub(super) fn run_with_config(
     let fetch = !opts.no_fetch && (opts.fetch || waku_config.bool("waku.create.fetch"));
     let from_default_branch = opts.from_default_branch
         || (opts.from.is_none() && waku_config.bool("waku.create.from-default-branch"));
-    let background_fetch = background_fetch_plan(root, branch, &opts, from_default_branch, fetch)?;
+    let (background_fetch, mut default_branch_ref) =
+        background_fetch_plan(root, branch, &opts, from_default_branch, fetch)?;
 
     if fetch && background_fetch.is_none() {
         let sp = if opts.quiet {
@@ -76,8 +84,9 @@ pub(super) fn run_with_config(
             Some(spinner("Fetching origin".to_string()))
         };
         git::fetch_origin(root)?;
-        // The fetch may have added the remote branch.
+        // The fetch may have added the remote branch or updated origin/HEAD.
         branch_refs = None;
+        default_branch_ref = None;
         if let Some(sp) = sp {
             sp.finish_and_clear();
         }
@@ -100,6 +109,7 @@ pub(super) fn run_with_config(
             branch,
             &opts,
             from_default_branch,
+            default_branch_ref,
             waku_config,
             branch_refs,
         );
@@ -116,13 +126,23 @@ pub(super) fn run_with_config(
 
         (wt_result, wti_files)
     });
-    let created_from_ref = wt_result?;
+    let wt_created = wt_result?;
 
-    create_symlinks(root, &wt_path, waku_config, opts.quiet)?;
-    if !opts.copy_from_base {
-        create_copies(root, &wt_path, waku_config, opts.quiet)?;
-    }
-    apply_worktreeinclude(root, &wt_path, wti_mode, wti_files?, opts.quiet)?;
+    let linked_any = create_symlinks(root, &wt_path, waku_config, opts.quiet)?;
+    let copied_any = if !opts.copy_from_base {
+        create_copies(root, &wt_path, waku_config, opts.quiet)?
+    } else {
+        false
+    };
+    let wti_remove_first = !wt_created.newly_created || linked_any || copied_any;
+    apply_worktreeinclude(
+        root,
+        &wt_path,
+        wti_mode,
+        wti_files?,
+        wti_remove_first,
+        opts.quiet,
+    )?;
     if waku_config.bool("waku.hook.postcreate.background")
         && !waku_config.values("waku.hook.postcreate").is_empty()
     {
@@ -139,7 +159,10 @@ pub(super) fn run_with_config(
     }
 
     if let Some(plan) = background_fetch {
-        let merge_ref = created_from_ref.as_ref().map(|_| plan.merge_ref.as_str());
+        let merge_ref = wt_created
+            .created_from_ref
+            .as_ref()
+            .map(|_| plan.merge_ref.as_str());
         let log_path = start_background_fetch(root, &wt_path, merge_ref)?;
         if !opts.quiet {
             eprintln!(
@@ -184,36 +207,81 @@ fn background_fetch_plan(
     opts: &CreateOptions,
     from_default_branch: bool,
     fetch: bool,
-) -> Result<Option<BackgroundFetchPlan>> {
+) -> Result<(Option<BackgroundFetchPlan>, Option<String>)> {
     if !fetch || opts.fetch {
-        return Ok(None);
+        return Ok((None, None));
     }
 
+    let mut resolved_default_ref = None;
     let merge_ref = if let Some(from_ref) = opts.from.as_deref() {
         if !is_origin_tracking_ref(from_ref) {
-            return Ok(None);
+            return Ok((None, None));
         }
         from_ref.to_string()
     } else if from_default_branch {
-        let Ok(default_ref) = git::remote_default_branch_ref(root) else {
-            return Ok(None);
+        let Ok(default_ref) = resolve_remote_default_branch_ref(root) else {
+            return Ok((None, None));
         };
+        resolved_default_ref = Some(default_ref.clone());
         default_ref
     } else {
         format!("origin/{branch}")
     };
 
     if !ref_exists(root, &merge_ref) {
-        return Ok(None);
+        return Ok((None, resolved_default_ref));
     }
-    Ok(Some(BackgroundFetchPlan { merge_ref }))
+    Ok((
+        Some(BackgroundFetchPlan { merge_ref }),
+        resolved_default_ref,
+    ))
 }
 
 fn is_origin_tracking_ref(reference: &str) -> bool {
     reference.starts_with("origin/") || reference.starts_with("refs/remotes/origin/")
 }
 
+fn resolve_remote_default_branch_ref(root: &Path) -> Result<String> {
+    if std::env::var_os("GIT_DIR").is_none() {
+        let symref_path = root.join(".git/refs/remotes/origin/HEAD");
+        if let Ok(contents) = fs::read_to_string(&symref_path) {
+            if let Some(target) = contents.trim().strip_prefix("ref: refs/remotes/") {
+                if !target.is_empty()
+                    && !target.contains("..")
+                    && !target.chars().any(char::is_whitespace)
+                {
+                    return Ok(target.to_string());
+                }
+            }
+        }
+    }
+    git::remote_default_branch_ref(root)
+}
+
 fn ref_exists(root: &Path, reference: &str) -> bool {
+    if std::env::var_os("GIT_DIR").is_none() {
+        let full_ref = reference
+            .strip_prefix("origin/")
+            .map(|name| format!("refs/remotes/origin/{name}"))
+            .or_else(|| {
+                reference
+                    .starts_with("refs/remotes/origin/")
+                    .then(|| reference.to_string())
+            });
+        if let Some(full_ref) = full_ref {
+            if !full_ref.contains("..") && !full_ref.contains(['~', '^', ':', '@', '\\', ' ']) {
+                let loose_path = root.join(".git").join(&full_ref);
+                if let Ok(contents) = fs::read_to_string(&loose_path) {
+                    let trimmed = contents.trim();
+                    if (trimmed.len() == 40 || trimmed.len() == 64)
+                        && trimmed.bytes().all(|b| b.is_ascii_hexdigit())
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
     git::git_output_in(root, &["rev-parse", "--verify", reference]).is_ok()
 }
 
@@ -242,6 +310,28 @@ fn start_background_fetch(root: &Path, wt_path: &Path, merge_ref: Option<&str>) 
 }
 
 fn worktree_git_dir(wt_path: &Path) -> Result<PathBuf> {
+    if std::env::var_os("GIT_DIR").is_none() {
+        let dot_git = wt_path.join(".git");
+        if dot_git.is_dir() {
+            return Ok(dot_git);
+        }
+        if let Ok(contents) = fs::read_to_string(&dot_git) {
+            if let Some(raw) = contents.trim().strip_prefix("gitdir:") {
+                let raw = raw.trim();
+                if !raw.is_empty() {
+                    let candidate = PathBuf::from(raw);
+                    let resolved = if candidate.is_absolute() {
+                        candidate
+                    } else {
+                        wt_path.join(candidate)
+                    };
+                    if resolved.is_dir() {
+                        return Ok(resolved);
+                    }
+                }
+            }
+        }
+    }
     let git_dir = PathBuf::from(git::git_output_in(wt_path, &["rev-parse", "--git-dir"])?);
     let git_dir = if git_dir.is_absolute() {
         git_dir
@@ -318,15 +408,22 @@ fn origin_branch_ref(root: &Path, reference: &str) -> Option<String> {
         .map(|_| full_ref)
 }
 
+struct CreateWorktreeResult {
+    created_from_ref: Option<String>,
+    newly_created: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn create_worktree(
     root: &Path,
     wt_path: &Path,
     branch: &str,
     opts: &CreateOptions,
     from_default_branch: bool,
+    default_branch_ref: Option<String>,
     config: &Config,
     branch_refs: Option<(bool, bool)>,
-) -> Result<Option<String>> {
+) -> Result<CreateWorktreeResult> {
     let (from, quiet) = (opts.from.as_deref(), opts.quiet);
     if wt_path.exists() {
         if !quiet {
@@ -336,7 +433,10 @@ fn create_worktree(
                 style(branch).bold(),
             );
         }
-        return Ok(None);
+        return Ok(CreateWorktreeResult {
+            created_from_ref: None,
+            newly_created: false,
+        });
     }
 
     let sp = if quiet {
@@ -381,13 +481,20 @@ fn create_worktree(
                 style(branch).bold(),
             );
         }
-        Ok(None)
+        Ok(CreateWorktreeResult {
+            created_from_ref: None,
+            newly_created: true,
+        })
     } else {
         let base_ref = if let Some(from_ref) = from {
             from_ref.to_string()
         } else if from_default_branch {
-            git::remote_default_branch_ref(root)
-                .context("could not resolve origin/HEAD; run git fetch origin or pass --from")?
+            match default_branch_ref {
+                Some(resolved) => resolved,
+                None => resolve_remote_default_branch_ref(root).context(
+                    "could not resolve origin/HEAD; run git fetch origin or pass --from",
+                )?,
+            }
         } else if remote_exists {
             format!("origin/{branch}")
         } else {
@@ -405,12 +512,16 @@ fn create_worktree(
                 style(branch).bold(),
             );
         }
-        Ok(Some(base_ref))
+        Ok(CreateWorktreeResult {
+            created_from_ref: Some(base_ref),
+            newly_created: true,
+        })
     }
 }
 
-fn create_symlinks(root: &Path, wt_path: &Path, config: &Config, quiet: bool) -> Result<()> {
+fn create_symlinks(root: &Path, wt_path: &Path, config: &Config, quiet: bool) -> Result<bool> {
     let includes = config.values("waku.link.include");
+    let mut linked_any = false;
 
     for name in includes {
         let source = root.join(name);
@@ -425,14 +536,15 @@ fn create_symlinks(root: &Path, wt_path: &Path, config: &Config, quiet: bool) ->
             continue;
         }
         link_entry(&source, &wt_path.join(name))?;
+        linked_any = true;
         if !quiet {
             eprintln!("  {} Linked {}", style("✔").green(), name);
         }
     }
-    Ok(())
+    Ok(linked_any)
 }
 
-fn create_copies(root: &Path, wt_path: &Path, config: &Config, quiet: bool) -> Result<()> {
+fn create_copies(root: &Path, wt_path: &Path, config: &Config, quiet: bool) -> Result<bool> {
     let copies = config.values("waku.copy.include");
     let valid: Vec<&str> = copies
         .iter()
@@ -454,7 +566,7 @@ fn create_copies(root: &Path, wt_path: &Path, config: &Config, quiet: bool) -> R
         .collect();
 
     if valid.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
 
     let excludes: Vec<PathBuf> = config
@@ -463,8 +575,8 @@ fn create_copies(root: &Path, wt_path: &Path, config: &Config, quiet: bool) -> R
         .map(|v| root.join(v.trim_end_matches('/')))
         .collect();
 
-    copy_entries_parallel(root, wt_path, &valid, &excludes, quiet);
-    Ok(())
+    copy_entries_parallel(root, wt_path, &valid, &excludes, true, quiet);
+    Ok(true)
 }
 
 fn apply_worktreeinclude(
@@ -472,6 +584,7 @@ fn apply_worktreeinclude(
     wt_path: &Path,
     mode: WorktreeIncludeMode,
     files: Vec<PathBuf>,
+    remove_first: bool,
     quiet: bool,
 ) -> Result<()> {
     if files.is_empty() {
@@ -485,7 +598,7 @@ fn apply_worktreeinclude(
                 .map(|p| p.to_str().unwrap_or_default())
                 .collect();
             // waku.copy.exclude applies only to waku.copy.include, not .worktreeinclude
-            copy_entries_parallel(root, wt_path, &names, &[], quiet);
+            copy_entries_parallel(root, wt_path, &names, &[], remove_first, quiet);
         }
         WorktreeIncludeMode::Link => {
             for rel in &files {
@@ -557,6 +670,7 @@ fn copy_entries_parallel(
     wt_path: &Path,
     names: &[&str],
     excludes: &[PathBuf],
+    remove_first: bool,
     quiet: bool,
 ) {
     let sp = if quiet {
@@ -570,18 +684,7 @@ fn copy_entries_parallel(
         Some(spinner(format!("Copying {label}")))
     };
 
-    let results = crate::parallel::map_with_limit(names, 4, |name| {
-        let source = root.join(name);
-        let target = wt_path.join(name);
-        let result = remove_existing(&target).and_then(|_| {
-            if names.len() == 1 {
-                copy_recursive_parallel(&source, &target, excludes)
-            } else {
-                copy_recursive(&source, &target, excludes)
-            }
-        });
-        (*name, result)
-    });
+    let results = copy_entries(root, wt_path, names, excludes, remove_first);
 
     if let Some(sp) = sp {
         sp.finish_and_clear();

@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+#[cfg(any(not(target_os = "linux"), test))]
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -9,31 +10,7 @@ pub(super) struct ActiveAgents {
 
 impl ActiveAgents {
     pub(super) fn inspect() -> Result<Self> {
-        let output = Command::new("ps")
-            .args(["-ww", "-axo", "pid=,args="])
-            .output()
-            .context("failed to list processes")?;
-        anyhow::ensure!(output.status.success(), "ps failed ({})", output.status);
-        let executables = Command::new("ps")
-            .args(["-ww", "-axo", "pid=,comm="])
-            .output()
-            .context("failed to list process executables")?;
-        anyhow::ensure!(
-            executables.status.success(),
-            "ps executables failed ({})",
-            executables.status
-        );
-        let mut pids: Vec<u32> = String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(agent_pid)
-            .collect();
-        pids.extend(
-            String::from_utf8_lossy(&executables.stdout)
-                .lines()
-                .filter_map(executable_pid),
-        );
-        pids.sort_unstable();
-        pids.dedup();
+        let pids = agent_pids()?;
         Ok(Self::from_directories(process_directories(&pids)?))
     }
 
@@ -65,6 +42,7 @@ fn normalized(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn process(line: &str) -> Option<(u32, &str)> {
     let line = line.trim();
     let (pid, command) = line.split_once(char::is_whitespace)?;
@@ -78,6 +56,7 @@ fn agent_name(name: &str) -> bool {
     )
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn agent_pid(line: &str) -> Option<u32> {
     let (pid, command) = process(line)?;
     let executable = command.split_whitespace().next()?;
@@ -99,13 +78,18 @@ fn agent_path(path: &Path) -> bool {
     name_matches || versioned_claude
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn executable_pid(line: &str) -> Option<u32> {
     let (pid, executable) = process(line)?;
     agent_path(Path::new(executable)).then_some(pid)
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn script_agent(args: &str) -> bool {
-    let mut words = args.split_whitespace();
+    script_agent_words(args.split_whitespace())
+}
+
+fn script_agent_words<'a>(mut words: impl Iterator<Item = &'a str>) -> bool {
     let Some(runtime) = words
         .next()
         .and_then(|s| Path::new(s).file_name())
@@ -128,6 +112,115 @@ fn script_agent(args: &str) -> bool {
         || script.contains("/@anthropic-ai/claude-code/")
         || script.contains("/@google/gemini-cli/")
         || (script == "-m" && words.next() == Some("aider"))
+}
+
+#[cfg(target_os = "linux")]
+fn agent_pids() -> Result<Vec<u32>> {
+    agent_pids_in_proc(Path::new("/proc"))
+}
+
+#[cfg(target_os = "linux")]
+fn agent_pids_in_proc(proc_root: &Path) -> Result<Vec<u32>> {
+    use std::io::Read;
+
+    let mut pids = Vec::new();
+    let mut cmdline_buf = [0u8; 4096];
+    let mut comm_buf = [0u8; 128];
+
+    let entries = std::fs::read_dir(proc_root)
+        .with_context(|| format!("failed to list processes in {}", proc_root.display()))?;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|s| s.parse::<u32>().ok()) else {
+            continue;
+        };
+        let mut path = entry.path();
+        path.push("cmdline");
+        let matched_cmdline = std::fs::File::open(&path)
+            .and_then(|mut file| file.read(&mut cmdline_buf))
+            .is_ok_and(|n| cmdline_matches_agent(&cmdline_buf[..n]));
+        if matched_cmdline {
+            pids.push(pid);
+            continue;
+        }
+        path.set_file_name("comm");
+        let matched_comm = std::fs::File::open(&path)
+            .and_then(|mut file| file.read(&mut comm_buf))
+            .is_ok_and(|n| {
+                let comm = String::from_utf8_lossy(&comm_buf[..n]);
+                agent_path(Path::new(comm.trim()))
+            });
+        if matched_comm {
+            pids.push(pid);
+        }
+    }
+    pids.sort_unstable();
+    pids.dedup();
+    Ok(pids)
+}
+
+#[cfg(target_os = "linux")]
+fn cmdline_matches_agent(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+    let mut args = bytes
+        .split(|&b| b == 0)
+        .take_while(|part| !part.is_empty())
+        .take(3)
+        .map(|part| String::from_utf8_lossy(part));
+    let Some(first) = args.next() else {
+        return false;
+    };
+    if agent_path(Path::new(first.as_ref())) {
+        return true;
+    }
+    let second = args.next();
+    let third = args.next();
+    let words = std::iter::once(first.as_ref())
+        .chain(second.as_deref())
+        .chain(third.as_deref());
+    script_agent_words(words)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn agent_pids() -> Result<Vec<u32>> {
+    let (output, executables) = std::thread::scope(|scope| {
+        let args = scope.spawn(|| {
+            Command::new("ps")
+                .args(["-ww", "-axo", "pid=,args="])
+                .output()
+                .context("failed to list processes")
+        });
+        let comm = Command::new("ps")
+            .args(["-ww", "-axo", "pid=,comm="])
+            .output()
+            .context("failed to list process executables");
+        (args.join().unwrap(), comm)
+    });
+    let output = output?;
+    anyhow::ensure!(output.status.success(), "ps failed ({})", output.status);
+    let executables = executables?;
+    anyhow::ensure!(
+        executables.status.success(),
+        "ps executables failed ({})",
+        executables.status
+    );
+    let mut pids: Vec<u32> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(agent_pid)
+        .collect();
+    pids.extend(
+        String::from_utf8_lossy(&executables.stdout)
+            .lines()
+            .filter_map(executable_pid),
+    );
+    pids.sort_unstable();
+    pids.dedup();
+    Ok(pids)
 }
 
 #[cfg(target_os = "linux")]
@@ -280,6 +373,42 @@ mod tests {
                 (124, PathBuf::from("/repo/other"))
             ])
         );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn proc_scan_detects_agents_with_spaces_scripts_and_comm_fallback() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let proc_root = tmp.path();
+        let write_proc = |pid: &str, cmdline: &[u8], comm: &str| {
+            let dir = proc_root.join(pid);
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(dir.join("cmdline"), cmdline).unwrap();
+            std::fs::write(dir.join("comm"), comm).unwrap();
+        };
+        write_proc("10", b"/opt/Agent Tools/codex\0--resume\0", "codex\n");
+        write_proc(
+            "11",
+            b"node\0/opt/node_modules/@anthropic-ai/claude-code/cli.js\0",
+            "node\n",
+        );
+        write_proc("12", b"python3\0-m\0aider\0", "python3\n");
+        write_proc(
+            "13",
+            b"/home/me/.local/share/claude/versions/2.1.302\0--resume\0",
+            "2.1.302\n",
+        );
+        write_proc("14", b"/usr/bin/wrapper\0", "claude\n");
+        write_proc("15", b"vim\0/tmp/codex\0", "vim\n");
+        write_proc("16", b"node\0/tmp/service.js\0codex\0", "node\n");
+        write_proc("17", b"", "kworker\n");
+        std::fs::create_dir(proc_root.join("self")).unwrap();
+
+        assert_eq!(
+            agent_pids_in_proc(proc_root).unwrap(),
+            vec![10, 11, 12, 13, 14]
+        );
+        assert!(agent_pids_in_proc(&proc_root.join("missing")).is_err());
     }
 
     #[test]
