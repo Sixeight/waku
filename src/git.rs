@@ -186,6 +186,9 @@ pub fn remote_branch_exists(dir: &Path, branch: &str) -> bool {
 }
 
 pub fn branch_refs_exist(dir: &Path, branch: &str) -> Result<(bool, bool)> {
+    if let Some(found) = try_branch_refs_exist_fast(dir, branch) {
+        return Ok(found);
+    }
     let local = format!("refs/heads/{branch}");
     let remote = format!("refs/remotes/origin/{branch}");
     let refs = git_output_in(
@@ -196,6 +199,66 @@ pub fn branch_refs_exist(dir: &Path, branch: &str) -> Result<(bool, bool)> {
         refs.lines().any(|name| name == local),
         refs.lines().any(|name| name == remote),
     ))
+}
+
+fn try_branch_refs_exist_fast(dir: &Path, branch: &str) -> Option<(bool, bool)> {
+    if std::env::var_os("GIT_DIR").is_some() || std::env::var_os("GIT_COMMON_DIR").is_some() {
+        return None;
+    }
+    if !is_simple_ref_suffix(branch) {
+        return None;
+    }
+    let git_dir = dir.join(".git");
+    if !git_dir.is_dir() || !git_dir.join("refs").is_dir() || git_dir.join("reftable").exists() {
+        return None;
+    }
+
+    let local_rel = format!("refs/heads/{branch}");
+    let remote_rel = format!("refs/remotes/origin/{branch}");
+    let mut local = loose_ref_exists(&git_dir, &local_rel);
+    let mut remote = loose_ref_exists(&git_dir, &remote_rel);
+
+    if !local || !remote {
+        let packed = git_dir.join("packed-refs");
+        match std::fs::read_to_string(&packed) {
+            Ok(contents) => {
+                for line in contents.lines() {
+                    if line.is_empty() || line.starts_with('#') || line.starts_with('^') {
+                        continue;
+                    }
+                    if let Some((_, refname)) = line.split_once(' ') {
+                        if !local && refname == local_rel {
+                            local = true;
+                        } else if !remote && refname == remote_rel {
+                            remote = true;
+                        }
+                        if local && remote {
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+
+    Some((local, remote))
+}
+
+fn is_simple_ref_suffix(branch: &str) -> bool {
+    !branch.is_empty()
+        && !branch.starts_with('/')
+        && !branch.ends_with('/')
+        && !branch.contains("..")
+        && !branch.contains("//")
+        && !branch.bytes().any(|b| {
+            b <= 0x20 || b == 0x7f || matches!(b, b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\')
+        })
+}
+
+fn loose_ref_exists(git_dir: &Path, ref_rel: &str) -> bool {
+    std::fs::symlink_metadata(git_dir.join(ref_rel)).is_ok_and(|meta| !meta.is_dir())
 }
 
 pub fn remote_default_branch_ref(dir: &Path) -> Result<String> {
@@ -733,5 +796,48 @@ mod tests {
             unique_commit_count(repo, &["target-a".to_string(), "target-b".to_string()]),
             Some(1)
         );
+    }
+
+    #[test]
+    fn branch_refs_exist_fast_path_checks_loose_and_packed_refs() {
+        let tmp = TempDir::new().expect("failed to create tempdir");
+        let repo = tmp.path();
+        for args in [
+            vec!["init", "-q", "-b", "main"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test"],
+            vec!["config", "commit.gpgsign", "false"],
+            vec!["commit", "--allow-empty", "-q", "-m", "initial"],
+            vec!["branch", "loose-only"],
+            vec!["branch", "packed-branch"],
+        ] {
+            let status = Command::new("git")
+                .args(&args)
+                .current_dir(repo)
+                .status()
+                .expect("failed to run git");
+            assert!(status.success(), "git {args:?} should succeed");
+        }
+        let oid = git_output_in(repo, &["rev-parse", "HEAD"]).unwrap();
+        let remote_ref = repo.join(".git/refs/remotes/origin/packed-branch");
+        std::fs::create_dir_all(remote_ref.parent().unwrap()).unwrap();
+        std::fs::write(&remote_ref, format!("{oid}\n")).unwrap();
+        git_in(repo, &["pack-refs", "--all"]).unwrap();
+        // Recreate a fresh loose-only branch after packing.
+        git_in(repo, &["branch", "fresh-loose"]).unwrap();
+
+        assert_eq!(
+            try_branch_refs_exist_fast(repo, "fresh-loose"),
+            Some((true, false))
+        );
+        assert_eq!(
+            try_branch_refs_exist_fast(repo, "packed-branch"),
+            Some((true, true))
+        );
+        assert_eq!(
+            try_branch_refs_exist_fast(repo, "missing-branch"),
+            Some((false, false))
+        );
+        assert_eq!(try_branch_refs_exist_fast(repo, "bad..name"), None);
     }
 }

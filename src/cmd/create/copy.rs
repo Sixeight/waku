@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Condvar, Mutex};
 
 use anyhow::{Context, Result};
 
@@ -45,15 +46,33 @@ pub(super) fn collect_worktreeinclude_files(root: &Path) -> Result<Vec<PathBuf>>
         return Ok(Vec::new());
     };
 
+    // When every pattern in `.worktreeinclude` is a root-anchored literal path
+    // (e.g. `/.env`, `apps/web/.env`, `/node_modules/`), scope `git ls-files` to
+    // those pathspecs so unrelated ignored trees like `target/` are never scanned.
+    let anchored_paths = anchored_literal_patterns(&wti_contents);
+    let pathspec_refs: Option<Vec<&str>> = anchored_paths
+        .as_ref()
+        .map(|paths| paths.iter().map(String::as_str).collect());
+    if let Some(ref paths) = pathspec_refs {
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+    }
+
     // Combining exclude sources would select their union rather than their intersection.
     // `--directory` omits matches inside an untracked directory that is only partly matched,
     // so the file-level listing supplies the candidates.
     let (ignored, included, included_entries) = std::thread::scope(|scope| {
-        let ignored = scope.spawn(|| git_ignored_paths(root, &["--exclude-standard"], true));
-        let included =
-            scope.spawn(|| git_ignored_paths(root, &["--exclude-from=.worktreeinclude"], true));
-        let included_entries =
-            scope.spawn(|| git_ignored_paths(root, &["--exclude-from=.worktreeinclude"], false));
+        let pathspecs = pathspec_refs.as_deref();
+        let ignored = scope.spawn(move || {
+            git_ignored_paths_scoped(root, &["--exclude-standard"], true, pathspecs)
+        });
+        let included = scope.spawn(move || {
+            git_ignored_paths_scoped(root, &["--exclude-from=.worktreeinclude"], true, pathspecs)
+        });
+        let included_entries = scope.spawn(move || {
+            git_ignored_paths_scoped(root, &["--exclude-from=.worktreeinclude"], false, pathspecs)
+        });
         (
             ignored.join().unwrap(),
             included.join().unwrap(),
@@ -317,15 +336,74 @@ struct IgnoredPath {
     directory: bool,
 }
 
+fn anchored_literal_patterns(contents: &str) -> Option<Vec<String>> {
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+    for raw_line in contents.lines() {
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('!') || line.contains(['*', '?', '[', ']', '\\']) {
+            return None;
+        }
+        let line = line.trim_end_matches(' ');
+        if line.is_empty() {
+            continue;
+        }
+        let had_leading_slash = line.starts_with('/');
+        let trimmed = line.trim_start_matches('/').trim_end_matches('/');
+        if trimmed.is_empty() {
+            return None;
+        }
+        // In gitignore syntax, a pattern without a leading or internal slash matches
+        // in any subdirectory, so it cannot be scoped to a single root pathspec.
+        if !had_leading_slash && !trimmed.contains('/') {
+            return None;
+        }
+        if trimmed
+            .split('/')
+            .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+        {
+            return None;
+        }
+        if seen.insert(trimmed.to_string()) {
+            paths.push(trimmed.to_string());
+        }
+        if paths.len() > 64 {
+            return None;
+        }
+    }
+    Some(paths)
+}
+
 fn git_ignored_paths(
     root: &Path,
     exclude_args: &[&str],
     directories: bool,
 ) -> Result<Vec<IgnoredPath>> {
-    let mut args = vec!["ls-files", "--others", "--ignored", "-z"];
+    git_ignored_paths_scoped(root, exclude_args, directories, None)
+}
+
+fn git_ignored_paths_scoped(
+    root: &Path,
+    exclude_args: &[&str],
+    directories: bool,
+    pathspecs: Option<&[&str]>,
+) -> Result<Vec<IgnoredPath>> {
+    let mut args =
+        Vec::with_capacity(exclude_args.len() + 8 + pathspecs.map_or(0, |specs| specs.len() + 1));
+    if pathspecs.is_some() {
+        args.push("--literal-pathspecs");
+    }
+    args.extend_from_slice(&["ls-files", "--others", "--ignored", "-z"]);
     args.extend_from_slice(exclude_args);
     if directories {
         args.extend_from_slice(&["--directory", "--no-empty-directory"]);
+    }
+    if let Some(specs) = pathspecs {
+        args.push("--");
+        args.extend_from_slice(specs);
     }
     parse_ignored_paths(&git::git_output_raw_in(root, &args)?)
 }
@@ -363,23 +441,33 @@ fn parse_ignored_paths(output: &[u8]) -> Result<Vec<IgnoredPath>> {
         .collect())
 }
 
-enum CopyTask {
+pub(super) struct CopyTarget<'a> {
+    pub(super) name: &'a str,
+    pub(super) src: PathBuf,
+    pub(super) dst: PathBuf,
+}
+
+enum CopyWork {
     File {
         index: usize,
         src: PathBuf,
         dst: PathBuf,
         parent_ensured: bool,
     },
-    DirEntry {
+    Dir {
         index: usize,
-        entry: fs::DirEntry,
-        dst_dir: PathBuf,
+        src: PathBuf,
+        dst: PathBuf,
+        parent_ensured: bool,
     },
 }
 
+struct WorkQueue {
+    items: Vec<CopyWork>,
+    in_flight: usize,
+}
+
 /// Copy multiple entries from `root` to `wt_path` using a shared 4-worker pool.
-/// When `names` is small and contains directories (e.g. `.env` + `node_modules/`),
-/// top-level directories are expanded into child tasks so all 4 workers stay busy.
 pub(super) fn copy_entries<'a>(
     root: &Path,
     wt_path: &Path,
@@ -387,31 +475,56 @@ pub(super) fn copy_entries<'a>(
     excludes: &[PathBuf],
     remove_first: bool,
 ) -> Vec<(&'a str, Result<()>)> {
-    if names.len() <= 64 {
-        let mut results: Vec<Option<Result<()>>> = (0..names.len()).map(|_| None).collect();
-        let mut tasks = Vec::new();
-        let mut ensured_parents: HashSet<PathBuf> = HashSet::new();
+    let targets: Vec<CopyTarget<'a>> = names
+        .iter()
+        .map(|&name| CopyTarget {
+            name,
+            src: root.join(name),
+            dst: wt_path.join(name),
+        })
+        .collect();
+    copy_entries_to(&targets, excludes, remove_first)
+}
 
-        for (index, &name) in names.iter().enumerate() {
-            let source = root.join(name);
-            let target = wt_path.join(name);
+/// Copy explicit `(src -> dst)` targets using a shared 4-worker work-stealing pool.
+/// Subdirectories discovered at any depth are pushed onto the shared queue so skewed
+/// trees (e.g. `node_modules/.pnpm/`) keep all 4 workers busy.
+pub(super) fn copy_entries_to<'a>(
+    targets: &[CopyTarget<'a>],
+    excludes: &[PathBuf],
+    remove_first: bool,
+) -> Vec<(&'a str, Result<()>)> {
+    if targets.is_empty() {
+        return Vec::new();
+    }
+
+    if targets.len() <= 64 {
+        let mut results: Vec<Option<Result<()>>> = (0..targets.len()).map(|_| None).collect();
+        let mut initial_work = Vec::with_capacity(targets.len());
+        let mut ensured_parents: HashSet<PathBuf> = HashSet::new();
+        let mut has_dir = false;
+
+        for (index, target) in targets.iter().enumerate() {
             if remove_first {
-                if let Err(err) = remove_existing(&target) {
+                if let Err(err) = remove_existing(&target.dst) {
                     results[index] = Some(Err(err));
                     continue;
                 }
             }
-            if excludes.iter().any(|ex| source.starts_with(ex)) {
+            if is_excluded(&target.src, excludes) {
                 results[index] = Some(Ok(()));
                 continue;
             }
-            if source.is_dir() {
-                match expand_directory_tasks(index, &source, &target, excludes, &mut tasks) {
-                    Ok(()) => {}
-                    Err(err) => results[index] = Some(Err(err)),
-                }
+            if target.src.is_dir() {
+                has_dir = true;
+                initial_work.push(CopyWork::Dir {
+                    index,
+                    src: target.src.clone(),
+                    dst: target.dst.clone(),
+                    parent_ensured: false,
+                });
             } else {
-                let parent_ensured = target.parent().is_none_or(|parent| {
+                let parent_ensured = target.dst.parent().is_none_or(|parent| {
                     ensured_parents.contains(parent)
                         || fs::create_dir_all(parent)
                             .map(|()| {
@@ -419,64 +532,79 @@ pub(super) fn copy_entries<'a>(
                             })
                             .is_ok()
                 });
-                tasks.push(CopyTask::File {
+                initial_work.push(CopyWork::File {
                     index,
-                    src: source,
-                    dst: target,
+                    src: target.src.clone(),
+                    dst: target.dst.clone(),
                     parent_ensured,
                 });
             }
         }
 
-        let task_results = crate::parallel::map_with_limit(&tasks, 4, |task| match task {
-            CopyTask::File {
-                index,
-                src,
-                dst,
-                parent_ensured,
-            } => {
-                let res = if !*parent_ensured {
-                    if let Some(parent) = dst.parent() {
-                        fs::create_dir_all(parent)
-                            .map_err(anyhow::Error::from)
-                            .and_then(|()| copy_file(src, dst))
-                    } else {
-                        copy_file(src, dst)
+        if !initial_work.is_empty() {
+            if !has_dir && initial_work.len() == 1 {
+                if let CopyWork::File {
+                    index,
+                    src,
+                    dst,
+                    parent_ensured,
+                } = initial_work.pop().unwrap()
+                {
+                    let res = copy_file_with_parent(&src, &dst, parent_ensured);
+                    if let Err(err) = res {
+                        results[index] = Some(Err(err));
                     }
+                }
+            } else {
+                let worker_count = if has_dir {
+                    4
                 } else {
-                    copy_file(src, dst)
-                };
-                (*index, res)
-            }
-            CopyTask::DirEntry {
-                index,
-                entry,
-                dst_dir,
-            } => (*index, copy_directory_entry(entry, dst_dir, excludes)),
-        });
+                    initial_work.len().min(4)
+                }
+                .min(
+                    std::thread::available_parallelism()
+                        .map(usize::from)
+                        .unwrap_or(1),
+                )
+                .max(1);
+                let queue = (
+                    Mutex::new(WorkQueue {
+                        items: initial_work,
+                        in_flight: 0,
+                    }),
+                    Condvar::new(),
+                );
+                let errors: Mutex<Vec<(usize, anyhow::Error)>> = Mutex::new(Vec::new());
 
-        for (index, res) in task_results {
-            if let Err(err) = res {
-                if !matches!(results[index], Some(Err(_))) {
-                    results[index] = Some(Err(err));
+                std::thread::scope(|scope| {
+                    for _ in 0..worker_count {
+                        scope.spawn(|| {
+                            copy_worker(&queue, &errors, excludes);
+                        });
+                    }
+                });
+
+                for (index, err) in errors.into_inner().unwrap() {
+                    if !matches!(results[index], Some(Err(_))) {
+                        results[index] = Some(Err(err));
+                    }
                 }
             }
         }
 
-        return names
+        return targets
             .iter()
             .zip(results)
-            .map(|(&name, res)| (name, res.unwrap_or(Ok(()))))
+            .map(|(target, res)| (target.name, res.unwrap_or(Ok(()))))
             .collect();
     }
 
     // Large entry list (e.g. thousands of globbed files): pre-create deduplicated parent
-    // directories once when copying into a clean worktree, then fan out across 4 workers.
+    // directories once when copying into a clean destination, then fan out across 4 workers.
     let ensured_parents = if !remove_first {
         let mut parents = HashSet::new();
-        for &name in names {
-            let target = wt_path.join(name);
-            if let Some(parent) = target.parent() {
+        for target in targets {
+            if let Some(parent) = target.dst.parent() {
                 if !parents.contains(parent) && fs::create_dir_all(parent).is_ok() {
                     parents.insert(parent.to_path_buf());
                 }
@@ -487,65 +615,161 @@ pub(super) fn copy_entries<'a>(
         None
     };
 
-    crate::parallel::map_with_limit(names, 4, |&name| {
-        let source = root.join(name);
-        let target = wt_path.join(name);
+    crate::parallel::map_with_limit(targets, 4, |target| {
         let result = if remove_first {
-            remove_existing(&target).and_then(|()| copy_recursive(&source, &target, excludes))
-        } else if excludes.iter().any(|ex| source.starts_with(ex)) {
+            remove_existing(&target.dst)
+                .and_then(|()| copy_recursive(&target.src, &target.dst, excludes))
+        } else if is_excluded(&target.src, excludes) {
             Ok(())
-        } else if source.is_dir() {
-            copy_directory(&source, &target, excludes)
+        } else if target.src.is_dir() {
+            copy_directory(&target.src, &target.dst, excludes)
         } else {
             let parent_ready = ensured_parents
                 .as_ref()
-                .is_some_and(|set| target.parent().is_none_or(|p| set.contains(p)));
-            if !parent_ready {
-                if let Some(parent) = target.parent() {
-                    if let Err(err) = fs::create_dir_all(parent) {
-                        return (name, Err(err.into()));
-                    }
-                }
-            }
-            copy_file(&source, &target)
+                .is_some_and(|set| target.dst.parent().is_none_or(|p| set.contains(p)));
+            copy_file_with_parent(&target.src, &target.dst, parent_ready)
         };
-        (name, result)
+        (target.name, result)
     })
 }
 
-fn expand_directory_tasks(
-    index: usize,
-    src: &Path,
-    dst: &Path,
+fn is_excluded(path: &Path, excludes: &[PathBuf]) -> bool {
+    !excludes.is_empty() && excludes.iter().any(|ex| path.starts_with(ex))
+}
+
+fn copy_file_with_parent(src: &Path, dst: &Path, parent_ensured: bool) -> Result<()> {
+    if !parent_ensured {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    copy_file(src, dst)
+}
+
+fn copy_worker(
+    queue: &(Mutex<WorkQueue>, Condvar),
+    errors: &Mutex<Vec<(usize, anyhow::Error)>>,
     excludes: &[PathBuf],
-    tasks: &mut Vec<CopyTask>,
-) -> Result<()> {
-    let mut current_src = src.to_path_buf();
-    let mut current_dst = dst.to_path_buf();
+) {
+    let (lock, cvar) = queue;
     loop {
-        fs::create_dir_all(&current_dst)
-            .with_context(|| format!("failed to create dir: {}", current_dst.display()))?;
-        let entries: Vec<_> = fs::read_dir(&current_src)
-            .with_context(|| format!("failed to read dir: {}", current_src.display()))?
-            .collect::<io::Result<_>>()?;
-        if let [entry] = entries.as_slice() {
-            let next_src = entry.path();
-            if !excludes.iter().any(|exclude| next_src.starts_with(exclude))
-                && entry.file_type()?.is_dir()
-            {
-                current_dst = current_dst.join(entry.file_name());
-                current_src = next_src;
-                continue;
+        let work = {
+            let mut state = lock.lock().unwrap();
+            loop {
+                if let Some(item) = state.items.pop() {
+                    state.in_flight += 1;
+                    break item;
+                }
+                if state.in_flight == 0 {
+                    return;
+                }
+                state = cvar.wait(state).unwrap();
+            }
+        };
+
+        match work {
+            CopyWork::File {
+                index,
+                src,
+                dst,
+                parent_ensured,
+            } => {
+                if let Err(err) = copy_file_with_parent(&src, &dst, parent_ensured) {
+                    errors.lock().unwrap().push((index, err));
+                }
+            }
+            CopyWork::Dir {
+                index,
+                src,
+                dst,
+                parent_ensured,
+            } => {
+                if let Err(err) =
+                    process_directory_work(index, src, dst, parent_ensured, queue, excludes)
+                {
+                    errors.lock().unwrap().push((index, err));
+                }
             }
         }
-        for entry in entries {
-            tasks.push(CopyTask::DirEntry {
-                index,
-                entry,
-                dst_dir: current_dst.clone(),
-            });
+
+        let mut state = lock.lock().unwrap();
+        state.in_flight -= 1;
+        if state.items.is_empty() && state.in_flight == 0 {
+            cvar.notify_all();
         }
-        return Ok(());
+    }
+}
+
+fn process_directory_work(
+    index: usize,
+    mut src: PathBuf,
+    mut dst: PathBuf,
+    mut parent_ensured: bool,
+    queue: &(Mutex<WorkQueue>, Condvar),
+    excludes: &[PathBuf],
+) -> Result<()> {
+    let (lock, cvar) = queue;
+    loop {
+        if parent_ensured {
+            create_dir_if_missing(&dst)
+                .with_context(|| format!("failed to create dir: {}", dst.display()))?;
+        } else {
+            fs::create_dir_all(&dst)
+                .with_context(|| format!("failed to create dir: {}", dst.display()))?;
+        }
+
+        let mut subdirs = Vec::new();
+        let mut files = Vec::new();
+        for entry in
+            fs::read_dir(&src).with_context(|| format!("failed to read dir: {}", src.display()))?
+        {
+            let entry = entry?;
+            let source = entry.path();
+            if is_excluded(&source, excludes) {
+                continue;
+            }
+            let target = dst.join(entry.file_name());
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() || (file_type.is_symlink() && source.is_dir()) {
+                subdirs.push((source, target));
+            } else {
+                files.push((source, target));
+            }
+        }
+
+        // If this directory contains only subdirectories, keep one inline to avoid
+        // queue churn on single-child chains while pushing the rest for other workers.
+        let inline_next = if files.is_empty() && !subdirs.is_empty() {
+            subdirs.pop()
+        } else {
+            None
+        };
+
+        if !subdirs.is_empty() {
+            let mut state = lock.lock().unwrap();
+            for (sub_src, sub_dst) in subdirs {
+                state.items.push(CopyWork::Dir {
+                    index,
+                    src: sub_src,
+                    dst: sub_dst,
+                    parent_ensured: true,
+                });
+            }
+            cvar.notify_all();
+        }
+
+        for (file_src, file_dst) in files {
+            copy_file(&file_src, &file_dst)?;
+        }
+
+        match inline_next {
+            Some((next_src, next_dst)) => {
+                src = next_src;
+                dst = next_dst;
+                parent_ensured = true;
+            }
+            None => return Ok(()),
+        }
     }
 }
 
@@ -555,7 +779,7 @@ pub(super) fn copy_recursive(src: &Path, dst: &Path, excludes: &[PathBuf]) -> Re
         excludes.iter().all(|ex| ex.is_absolute()),
         "excludes must be absolute paths"
     );
-    if excludes.iter().any(|ex| src.starts_with(ex)) {
+    if is_excluded(src, excludes) {
         return Ok(());
     }
     if src.is_dir() {
@@ -571,17 +795,16 @@ pub(super) fn copy_recursive(src: &Path, dst: &Path, excludes: &[PathBuf]) -> Re
 
 #[cfg(test)]
 pub(super) fn copy_recursive_parallel(src: &Path, dst: &Path, excludes: &[PathBuf]) -> Result<()> {
-    if excludes.iter().any(|ex| src.starts_with(ex)) || !src.is_dir() {
-        return copy_recursive(src, dst, excludes);
-    }
-    let mut tasks = Vec::new();
-    expand_directory_tasks(0, src, dst, excludes, &mut tasks)?;
-    crate::parallel::map_with_limit(&tasks, 4, |task| match task {
-        CopyTask::DirEntry { entry, dst_dir, .. } => copy_directory_entry(entry, dst_dir, excludes),
-        CopyTask::File { src, dst, .. } => copy_file(src, dst),
-    })
-    .into_iter()
-    .collect()
+    let target = CopyTarget {
+        name: "",
+        src: src.to_path_buf(),
+        dst: dst.to_path_buf(),
+    };
+    copy_entries_to(&[target], excludes, false)
+        .into_iter()
+        .next()
+        .unwrap()
+        .1
 }
 
 fn copy_directory(src: &Path, dst: &Path, excludes: &[PathBuf]) -> Result<()> {
@@ -917,5 +1140,50 @@ mod tests {
                 format!("pkg-{pkg}")
             );
         }
+    }
+
+    #[test]
+    fn copy_entries_copies_deep_skewed_trees_with_work_stealing() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+        fs::create_dir_all(src.join("node_modules/.bin")).unwrap();
+        fs::write(src.join("node_modules/.bin/tool"), "#!/bin/sh\n").unwrap();
+        for pkg in 0..16 {
+            let dir = src.join(format!("node_modules/.pnpm/pkg-{pkg}/lib"));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("index.js"), format!("pkg-{pkg}")).unwrap();
+        }
+        let excludes = vec![src.join("node_modules/.pnpm/pkg-7")];
+        let results = copy_entries(&src, &dst, &["node_modules"], &excludes, false);
+        assert!(results[0].1.is_ok());
+        assert_eq!(
+            fs::read_to_string(dst.join("node_modules/.bin/tool")).unwrap(),
+            "#!/bin/sh\n"
+        );
+        assert!(!dst.join("node_modules/.pnpm/pkg-7").exists());
+        for pkg in (0..16).filter(|&p| p != 7) {
+            assert_eq!(
+                fs::read_to_string(dst.join(format!("node_modules/.pnpm/pkg-{pkg}/lib/index.js")))
+                    .unwrap(),
+                format!("pkg-{pkg}")
+            );
+        }
+    }
+
+    #[test]
+    fn anchored_literal_patterns_extracts_only_root_anchored_literals() {
+        assert_eq!(
+            anchored_literal_patterns("# comment\n/.env\napps/web/.env\n/node_modules/\n"),
+            Some(vec![
+                ".env".to_string(),
+                "apps/web/.env".to_string(),
+                "node_modules".to_string(),
+            ])
+        );
+        assert_eq!(anchored_literal_patterns(".env\n"), None);
+        assert_eq!(anchored_literal_patterns("node_modules/\n"), None);
+        assert_eq!(anchored_literal_patterns("/.env\n!/.env\n"), None);
+        assert_eq!(anchored_literal_patterns("apps/*/.env\n"), None);
     }
 }
