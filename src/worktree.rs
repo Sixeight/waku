@@ -28,8 +28,102 @@ pub fn repo_root() -> Result<PathBuf> {
     Ok(repo_root_and_toplevel()?.0)
 }
 
+/// Fast spawn-free discovery of `(repo_root, current_toplevel)` when Git
+/// environment override variables are unset. Returns `None` for bare repos,
+/// submodules, inside `.git/`, custom `GIT_*` env vars, or any unexpected
+/// layout so callers fall back to `git rev-parse`.
+pub(crate) fn try_repo_root_and_toplevel_fast() -> Option<(PathBuf, PathBuf)> {
+    const OVERRIDE_ENVS: &[&str] = &[
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_CEILING_DIRECTORIES",
+        "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        "GIT_INDEX_FILE",
+    ];
+    if OVERRIDE_ENVS
+        .iter()
+        .any(|var| std::env::var_os(var).is_some())
+    {
+        return None;
+    }
+
+    let cwd = std::env::current_dir().ok()?.canonicalize().ok()?;
+    #[cfg(unix)]
+    let start_dev = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(&cwd).ok()?.dev()
+    };
+
+    for dir in cwd.ancestors() {
+        if dir.file_name() == Some(std::ffi::OsStr::new(".git")) {
+            return None;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if std::fs::metadata(dir).ok()?.dev() != start_dev {
+                return None;
+            }
+        }
+        let dot_git = dir.join(".git");
+        match std::fs::symlink_metadata(&dot_git) {
+            Ok(meta) if meta.is_dir() => {
+                if dot_git.join("HEAD").is_file()
+                    && dot_git.join("objects").is_dir()
+                    && !dot_git.join("commondir").exists()
+                {
+                    let toplevel = dir.to_path_buf();
+                    return Some((toplevel.clone(), toplevel));
+                }
+                return None;
+            }
+            Ok(meta) if meta.is_file() => {
+                let content = std::fs::read_to_string(&dot_git).ok()?;
+                let raw = content.trim().strip_prefix("gitdir:")?.trim();
+                if raw.is_empty() {
+                    return None;
+                }
+                let gitdir = if Path::new(raw).is_absolute() {
+                    PathBuf::from(raw)
+                } else {
+                    dir.join(raw)
+                }
+                .canonicalize()
+                .ok()?;
+                let commondir_raw = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+                let commondir_trimmed = commondir_raw.trim();
+                if commondir_trimmed.is_empty() {
+                    return None;
+                }
+                let common_dir = if Path::new(commondir_trimmed).is_absolute() {
+                    PathBuf::from(commondir_trimmed)
+                } else {
+                    gitdir.join(commondir_trimmed)
+                }
+                .canonicalize()
+                .ok()?;
+                if common_dir.file_name() != Some(std::ffi::OsStr::new(".git"))
+                    || !common_dir.join("HEAD").is_file()
+                    || !common_dir.join("objects").is_dir()
+                {
+                    return None;
+                }
+                let root = common_dir.parent()?.to_path_buf();
+                return Some((root, dir.to_path_buf()));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// Get the repository root and the toplevel of the current worktree.
 pub fn repo_root_and_toplevel() -> Result<(PathBuf, PathBuf)> {
+    if let Some(found) = try_repo_root_and_toplevel_fast() {
+        return Ok(found);
+    }
     let output = git::git_output_in(
         Path::new("."),
         &["rev-parse", "--git-common-dir", "--show-toplevel"],
@@ -126,6 +220,38 @@ pub fn resolve(root: &Path, query: &str, config: &Config) -> Result<PathBuf> {
     }
 
     resolve_from_list(query, &git::worktree_list(root)?)
+}
+
+/// Resolve a query to `(worktree_path, checked_out_branch)` using pre-loaded waku config,
+/// avoiding `git worktree list` when the query resolves via the conventional path or an
+/// owned linked worktree path.
+pub fn resolve_with_branch(
+    root: &Path,
+    query: &str,
+    config: &Config,
+) -> Result<(PathBuf, Option<String>)> {
+    let query_path = PathBuf::from(query);
+    if query_path.is_absolute() && query_path.is_dir() {
+        if let Some(branch) = worktree_branch(root, &query_path) {
+            return Ok((query_path, Some(branch)));
+        }
+    } else if let Ok(candidate) = worktree_path_with_config(root, query, config) {
+        if candidate.is_dir() && worktree_branch(root, &candidate).as_deref() == Some(query) {
+            return Ok((
+                candidate.canonicalize().unwrap_or(candidate),
+                Some(query.to_string()),
+            ));
+        }
+    }
+
+    let worktrees = git::worktree_list(root)?;
+    let path = resolve_from_list(query, &worktrees)?;
+    let path_str = path.to_string_lossy();
+    let branch = worktrees
+        .iter()
+        .find(|(p, _)| p == path_str.as_ref())
+        .and_then(|(_, b)| b.clone());
+    Ok((path, branch))
 }
 
 pub fn resolve_from_list(query: &str, worktrees: &[(String, Option<String>)]) -> Result<PathBuf> {
@@ -450,5 +576,26 @@ mod tests {
         ]);
         let base = worktrees_base_with_config(root, &config).unwrap();
         assert_eq!(base, PathBuf::from("/last/worktrees"));
+    }
+
+    #[test]
+    fn resolve_with_branch_fast_path_spawns_no_git() {
+        let tmp = TempDir::new().expect("failed to create tempdir");
+        let root = tmp.path().join("repo");
+        let gitdir = root.join(".git/worktrees/feature-bar");
+        std::fs::create_dir_all(&gitdir).unwrap();
+        std::fs::write(gitdir.join("HEAD"), "ref: refs/heads/feature/bar\n").unwrap();
+        let wt_path = tmp.path().join("wt/feature-bar");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        std::fs::write(
+            wt_path.join(".git"),
+            format!("gitdir: {}\n", gitdir.display()),
+        )
+        .unwrap();
+
+        let config = config_for(&tmp.path().join("wt"));
+        let (resolved, branch) = resolve_with_branch(&root, "feature/bar", &config).unwrap();
+        assert_eq!(resolved, wt_path.canonicalize().unwrap());
+        assert_eq!(branch.as_deref(), Some("feature/bar"));
     }
 }

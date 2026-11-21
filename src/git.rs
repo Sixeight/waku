@@ -158,7 +158,7 @@ pub fn config_get_regexp(pattern: &str) -> Result<Vec<(String, String)>> {
 /// Load the first-parent commit hashes of `ref_name` into a HashSet.
 /// Called once, then shared across all branch divergence checks.
 pub fn first_parent_commits(dir: &Path, ref_name: &str) -> HashSet<String> {
-    git_output_in(dir, &["log", "--first-parent", "--format=%H", ref_name])
+    git_output_in(dir, &["rev-list", "--first-parent", ref_name])
         .unwrap_or_default()
         .lines()
         .map(|s| s.to_string())
@@ -232,22 +232,41 @@ pub fn has_branch_diverged(dir: &Path, first_parents: &HashSet<String>, branch: 
 }
 
 pub fn ref_oids(dir: &Path) -> Result<HashMap<String, String>> {
+    Ok(ref_targets(dir)?
+        .into_iter()
+        .map(|(name, target)| (name, target.commit))
+        .collect())
+}
+
+pub fn ref_targets(dir: &Path) -> Result<HashMap<String, MergeTarget>> {
     let raw = git_output_in(
         dir,
         &[
             "for-each-ref",
-            "--format=%(refname)%00%(objectname)",
+            "--format=%(refname)%00%(objectname)%00%(tree)",
             "refs/heads/",
             "refs/remotes/",
         ],
     )?;
     Ok(raw
         .lines()
-        .filter_map(|line| line.split_once('\0'))
-        .map(|(name, oid)| (name.to_string(), oid.to_string()))
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, '\0');
+            let name = parts.next()?;
+            let commit = parts.next()?;
+            let tree = parts.next()?;
+            Some((
+                name.to_string(),
+                MergeTarget {
+                    commit: commit.to_string(),
+                    tree: tree.to_string(),
+                },
+            ))
+        })
         .collect())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeTarget {
     pub commit: String,
     pub tree: String,
@@ -338,6 +357,18 @@ pub fn unique_commit_counts(
     target: &str,
     branches: &[&str],
 ) -> Result<HashMap<String, usize>> {
+    Ok(branch_ahead_counts(dir, target, branches)?
+        .into_values()
+        .collect())
+}
+
+/// Return `branch -> (tip_oid, ahead_count)` relative to `target` in one `for-each-ref`.
+/// Branches with `ahead_count == 0` are merged into `target`.
+pub fn branch_ahead_counts(
+    dir: &Path,
+    target: &str,
+    branches: &[&str],
+) -> Result<HashMap<String, (String, usize)>> {
     if branches.is_empty() {
         return Ok(HashMap::new());
     }
@@ -345,17 +376,26 @@ pub fn unique_commit_counts(
         .iter()
         .map(|branch| format!("refs/heads/{branch}"))
         .collect();
-    let format = format!("--format=%(objectname)%00%(ahead-behind:{target})");
+    let format = format!("--format=%(refname)%00%(objectname)%00%(ahead-behind:{target})");
     let mut args = vec!["for-each-ref", &format, "--"];
     args.extend(patterns.iter().map(String::as_str));
     let raw = git_output_in(dir, &args)?;
     raw.lines()
         .map(|line| {
-            let (tip, counts) = line.split_once('\0').context("missing commit count")?;
+            let mut parts = line.splitn(3, '\0');
+            let refname = parts.next().context("missing refname")?;
+            let branch = refname
+                .strip_prefix("refs/heads/")
+                .context("unexpected refname")?;
+            let tip = parts.next().context("missing commit oid")?;
+            let counts = parts.next().context("missing commit count")?;
             let (ahead, _) = counts.split_once(' ').context("missing behind count")?;
             Ok((
-                tip.to_string(),
-                ahead.parse().context("invalid ahead count")?,
+                branch.to_string(),
+                (
+                    tip.to_string(),
+                    ahead.parse().context("invalid ahead count")?,
+                ),
             ))
         })
         .collect()
