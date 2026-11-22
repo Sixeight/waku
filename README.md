@@ -1,28 +1,38 @@
 # git-waku
 
+[![CI](https://github.com/Sixeight/waku/actions/workflows/ci.yml/badge.svg)](https://github.com/Sixeight/waku/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Sixeight/waku)](https://github.com/Sixeight/waku/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **waku** (枠) — a frame, a dedicated space.
 
-`git-waku` is a fast Git worktree manager. It creates worktrees, shares
-dependencies with them, launches your editor or AI agent, and removes
-worktrees whose branches have been merged.
+`git-waku` is a fast Git worktree manager built for parallel branches and AI
+coding agents. It creates worktrees, shares ignored dependencies with them,
+launches your editor or agent, and safely cleans up merged worktrees.
+
+```sh
+git waku create feat/auth --agent   # create worktree, share deps, launch agent
+git waku open feat/auth             # reopen in your editor (or --agent)
+git waku clean                      # inspect and remove merged worktrees
+```
 
 ## Fast
 
-Most tools either wait on the network to fetch or start from stale refs. With
+Most tools either block on the network to fetch or start from stale refs. With
 `waku.create.fetch`, `create` returns from cached refs and fast-forwards the new
 branch when the background fetch lands, so you get the fetched commit without
 the wait.
 
-Median `create` time in ms, waku against the fastest of worktrunk, gtr,
-git-wt, gwq, wtp, rabi, and workz:
+Median `create` time against the fastest of worktrunk, gtr, git-wt, gwq, wtp,
+rabi, and workz:
 
 | Scenario | waku | Next fastest |
 | --- | ---: | ---: |
-| 22-file repository | 6.9 | 7.7 (wtp) |
-| Copy 640 files in `node_modules/` | 13.8 | 17.3 (workz) |
-| Copy 5,000 files (200 MB) | 53.2 | 77.2 (workz) |
-| django, about 7,000 files | 106.5 | 228.2 (workz) |
-| Origin with 300 ms latency, fresh result | 11.0 | 414.7 (gtr) |
+| 22-file repository | **6.9 ms** | 7.7 ms (wtp) |
+| Copy 640 files in `node_modules/` | **13.8 ms** | 17.3 ms (workz) |
+| Copy 5,000 files (200 MB) | **53.2 ms** | 77.2 ms (workz) |
+| django, about 7,000 files | **106.5 ms** | 228.2 ms (workz) |
+| Origin with 300 ms latency, fresh result | **11.0 ms** | 414.7 ms (gtr) |
 
 Against an origin that answers after 300 ms, wtp and workz return in about
 8 ms, faster than waku. They never fetch, so their worktrees stay on the old
@@ -36,11 +46,12 @@ to reproduce.
 
 ## Install
 
-Git discovers an executable named `git-waku` on your `PATH` as `git waku`. Check the install with `git waku --version`.
+Git discovers an executable named `git-waku` on your `PATH` as `git waku`.
 
 ### GitHub Release
 
-Download the archive and the matching `.sha256` file for your OS and CPU from [GitHub Releases](https://github.com/Sixeight/waku/releases):
+Download the archive and matching `.sha256` file from
+[GitHub Releases](https://github.com/Sixeight/waku/releases):
 
 | OS | CPU | Archive |
 | --- | --- | --- |
@@ -49,7 +60,8 @@ Download the archive and the matching `.sha256` file for your OS and CPU from [G
 | macOS | Apple Silicon | `git-waku-aarch64-apple-darwin.tar.gz` |
 | macOS | Intel | `git-waku-x86_64-apple-darwin.tar.gz` |
 
-Verify the archive, extract it, and put `git-waku` on your `PATH`. Linux example for x86_64:
+Verify, extract, and install onto your `PATH` (Linux x86_64 example; on macOS
+use `shasum -a 256 -c` instead of `sha256sum -c`):
 
 ```sh
 sha256sum -c git-waku-x86_64-unknown-linux-gnu.tar.gz.sha256
@@ -58,17 +70,13 @@ install -m 755 git-waku-x86_64-unknown-linux-gnu/git-waku ~/.local/bin/git-waku
 git waku --version
 ```
 
-On macOS, verify with `shasum -a 256 -c` instead of `sha256sum -c`. `~/.local/bin` must be on your `PATH`.
-
-Each archive has a leading directory named after the target. The binary inside is `git-waku`.
-
 ### From source
+
+Requires Rust 1.85 or later (`cargo` installs to `~/.cargo/bin`):
 
 ```sh
 cargo install --git https://github.com/Sixeight/waku --locked
 ```
-
-This needs Rust 1.85 or later. `cargo` puts `git-waku` in `~/.cargo/bin`.
 
 ## Usage
 
@@ -76,75 +84,89 @@ This needs Rust 1.85 or later. `cargo` puts `git-waku` in `~/.cargo/bin`.
 
 ```sh
 git waku create my-feature
-git waku create my-feature --from origin/main   # branch from a specific ref
-git waku create my-feature --agent              # open with Claude Code
-git waku create my-feature --editor             # open with Neovim
-git waku create my-feature --cd                 # start a shell in the worktree
-git waku create my-feature --no-fetch           # use cached refs only
-git waku create my-feature --fetch              # wait for the fetch first
+git waku create my-feature --from origin/main     # branch from a specific ref
+git waku create my-feature --from-default-branch  # branch from origin's default branch
+git waku create my-feature --agent                # open with your AI agent (default: claude)
+git waku create my-feature -a="codex --model gpt-5"
+git waku create my-feature --editor               # open with your editor (default: nvim)
+git waku create my-feature --cd                   # start a shell in the worktree
+git waku create my-feature --copy-from-base       # keep copy targets at the base revision
+git waku create my-feature --no-fetch             # use cached refs only
+git waku create my-feature --fetch                # wait for the fetch first
 ```
 
-Worktrees go in a sibling `{repo}-worktrees/` directory. Slashes in branch
-names become dashes:
+Worktrees are created in a sibling `{repo}-worktrees/` directory with slashes
+in branch names converted to dashes:
 
-```
+```text
 myrepo/
 myrepo-worktrees/
   my-feature/
   sixeight-some-branch/    # from sixeight/some-branch
 ```
 
-With `waku.create.fetch` enabled, `create` starts from cached refs, fetches in
-the background, and fast-forwards the new branch when it can.
-
-### Path and open
+### Open and path
 
 ```sh
-cd $(git waku path my-feature)              # by branch or directory name
-git waku open my-feature                    # launch Neovim
-git waku open my-feature --agent -- --resume # pass args through to the agent
-git waku open                               # open the current directory
-```
-
-### Remove
-
-```sh
-git waku remove my-feature                  # remove worktree and branch
-git waku remove my-feature --keep-branch
-git waku remove my-feature --force          # even if dirty
+git waku open my-feature                      # launch editor (creates worktree if missing)
+git waku open my-feature --agent -- --resume  # pass args through to the agent
+git waku open                                 # open the current directory
+cd "$(git waku path my-feature)"              # resolve by branch, dir name, or path
 ```
 
 ### Clean
 
 ```sh
-git waku clean                              # interactive selector
+git waku clean                # interactive selector
 git waku clean --dry-run
-git waku clean --yes                        # skip confirmation
-git waku clean --yes --force                # also remove dirty worktrees
+git waku clean --yes          # remove default selection without prompting
+git waku clean --yes --force  # also remove dirty worktrees
 ```
 
-Merged and squash-merged worktrees are selected by default when they are clean.
-Dirty worktrees, unchanged branches, and branches with unique commits are listed
-but left unchecked. Worktrees used by a running AI agent (Claude Code, Codex, OpenCode,
-Gemini CLI, aider, Grok CLI) cannot be selected, even with `--force`.
+```text
+Clean candidates ([✔] selected by default):
+    DEL  BRANCH        REASON  FILES         COMMITS   UPDATED         SUBJECT
+  ▸ [✔]  feat/auth     merged  clean         merged    2 hours ago     Add OAuth login
+    [ ]  fix/typo      merged  active agent  merged    10 minutes ago  Fix README typo
+    [ ]  wip/refactor  closed  dirty         1 unique  2 days ago      WIP: extract parser
+    1/3 · 1 selected · d diff / l log / s status
+```
 
-In the selector, press `d` for a diff, `l` for unmerged commits, and `s` for
-status. See [docs/clean.md](docs/clean.md) or `git waku clean --help` for the
+- **Squash-merge aware** — detects both regular merges and squash merges via
+  `git merge-tree`.
+- **Active agent protection** — worktrees used by running Claude Code, Codex,
+  OpenCode, Gemini CLI, aider, or Grok CLI processes cannot be selected, even
+  with `--force`.
+- **Inspect before deleting** — press `d` for diff, `l` for unmerged commits,
+  and `s` for status. State is re-verified right before each removal.
+
+See [docs/clean.md](docs/clean.md) or `git waku clean --help` for the full
 selection rules and safety checks.
 
-### Other commands
+### Remove
 
+```sh
+git waku remove my-feature                # remove worktree and branch
+git waku remove my-feature --keep-branch
+git waku remove my-feature --force        # even if dirty
+```
+
+Files copied or symlinked by `git-waku` are ignored during dirty checks.
+
+### Shell completions and passthrough
+
+```sh
+git waku completions zsh > _git-waku   # supports bash, elvish, fish, powershell, zsh
+```
+
+Aliases: `new` (`create`), `use` (`open`), `cd` (`path`), `rm` (`remove`).
 Unrecognized subcommands are forwarded to `git worktree`, so `git waku list`
 runs `git worktree list`.
 
-```sh
-git waku completions zsh > _git-waku        # also bash, fish
-```
-
 ## Configuration
 
-All settings use `git config`. See [docs/configuration.md](docs/configuration.md)
-for details.
+All settings live in `git config`, and `git waku config` wraps it directly. See
+[docs/configuration.md](docs/configuration.md) for details.
 
 | Key | Description |
 | --- | --- |
@@ -156,25 +178,24 @@ for details.
 | `waku.command.agent` | Agent command (default: `claude`) |
 | `waku.command.editor` | Editor command (default: `nvim`) |
 | `waku.hook.postCreate` | Shell commands run after `create` |
-| `waku.hook.postcreate.background` | Run hooks without waiting; output goes to `waku-post-create.log` in the worktree's Git directory |
-| `waku.create.fetch` | Fetch origin when creating |
+| `waku.hook.postcreate.background` | Run post-create hooks in the background (logs to `waku-post-create.log` in the worktree Git dir) |
+| `waku.create.fetch` | Fetch `origin` in the background when creating |
+| `waku.create.from-default-branch` | Create new branches from `origin`'s default branch by default |
 
 ```sh
-git config --add waku.link.include node_modules
-git config --add waku.copy.include .direnv
-git config waku.command.agent "claude --resume"
-git config --add waku.hook.postCreate "direnv allow"
+git waku config --add waku.link.include node_modules
+git waku config --add waku.copy.include .direnv
+git waku config waku.command.agent "claude --resume"
+git waku config --add waku.hook.postCreate "direnv allow"
+git waku config waku.create.fetch true
 ```
-
-`--copy-from-base` keeps copy targets at the new worktree's base revision.
-`-a="codex --model gpt-5"` overrides the agent command for one launch.
 
 ### `.worktreeinclude`
 
 A `.worktreeinclude` file at the repository root selects gitignored files to
-bring into new worktrees. It uses `.gitignore` syntax, including `!` negation.
+bring into new worktrees using `.gitignore` syntax, including `!` negation:
 
-```
+```gitignore
 # .worktreeinclude
 **/.env
 node_modules/
@@ -187,4 +208,4 @@ Inspired by [git-worktree-runner](https://github.com/coderabbitai/git-worktree-r
 
 ## License
 
-MIT
+[MIT](LICENSE)
