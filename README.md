@@ -28,17 +28,18 @@ rabi, and workz:
 
 | Scenario | waku | Next fastest |
 | --- | ---: | ---: |
-| 22-file repository | **6.9 ms** | 7.7 ms (wtp) |
-| Copy 640 files in `node_modules/` | **13.8 ms** | 17.3 ms (workz) |
-| Copy 5,000 files (200 MB) | **53.2 ms** | 77.2 ms (workz) |
-| django, about 7,000 files | **106.5 ms** | 228.2 ms (workz) |
-| Origin with 300 ms latency, fresh result | **11.0 ms** | 414.7 ms (gtr) |
+| 22-file repository | **6.2 ms** | 7.7 ms (wtp) |
+| Copy 640 files in `node_modules/` | **10.5 ms** | 17.7 ms (workz) |
+| Copy 5,000 files (200 MB) | **45.7 ms** | 76.4 ms (workz) |
+| django, about 7,000 files | **97.3 ms** | 219.7 ms (gwq) |
+| Origin with 300 ms latency, fresh result | **7.2 ms** | 552.0 ms (gtr) |
 
-Against an origin that answers after 300 ms, wtp and workz return in about
-8 ms, faster than waku. They never fetch, so their worktrees stay on the old
-commit; gtr is the only other tool that ends on the fetched commit. On django,
-waku also ends on the fetched commit, and checks out about twice as fast as the
-next tool because it runs `git worktree add` with `checkout.workers=8`.
+Against an origin that answers after 300 ms, waku is even faster than tools
+that skip fetching (`wtp` at 8.4 ms, `workz` at 8.7 ms), while `gtr` (552.0 ms)
+is the only other tool that ends on the fetched commit. On django, waku finishes
+under 100 ms — more than twice as fast as the next tool — because it runs
+`git worktree add` with `checkout.workers=8`, and still ends on the fetched
+commit.
 
 Measured on Linux (btrfs on NVMe) with Git 2.56.0. See
 [docs/performance.md](docs/performance.md) for the full table, method, and how
