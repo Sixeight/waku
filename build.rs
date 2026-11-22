@@ -11,6 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for shell in clap_complete::Shell::value_variants() {
         let cli = cli::Cli::command();
         let mut command = clap::Command::new("git-waku")
+            .version(env!("CARGO_PKG_VERSION"))
             .args(cli.get_arguments().cloned())
             .subcommands(
                 cli.get_subcommands()

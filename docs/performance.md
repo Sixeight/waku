@@ -76,26 +76,27 @@ rustc --edition=2021 -O -Clto -Cpanic=abort scripts/benchmark-agent-paths.rs \
 
 With `waku.create.fetch`, `git waku create` returns before the fetch finishes
 and still ends up on the fetched commit. waku had the lowest median in every
-scenario except `fetch`, where the faster tools skip the fetch and stay stale.
-On a 7,000-file repository it checks out about twice as fast as the next tool.
+scenario — including `fetch`, even against tools that skip the fetch and stay
+stale — and on a 7,000-file repository it checks out more than twice as fast as
+the next tool.
 
-### Results on 2026-10-26
+### Results on 2026-11-22
 
-Measured on Linux 7.2.8 (btrfs on NVMe, 24 cores) with Git 2.56.0. Medians in
-ms. 15 samples per scenario; 7 for `heavy` and 10 for `real`. The JSON report
-has every sample and the min–max.
+Measured on Linux 7.2.15 (btrfs on NVMe, 24 cores) with Git 2.56.0. Medians in
+ms. 15 samples per scenario; 7 for `heavy` and 10 for `real` (with
+`--real-settle 10`). The JSON report has every sample and the min–max.
 
 | Tool | plain | copy | link | heavy | fetch | real |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| waku | 6.9 | 13.8 | 7.2 | 53.2 | 11.0, fresh after fetch | 106.5, fresh after fetch |
-| waku `--fetch` | | | | | 317.6, fresh | 649.5, fresh |
-| worktrunk 0.81.0 | 19.0 | 47.3 | | 82.9 | 19.5, stale | 242.7, stale |
-| gtr 2.11.1 | 105.4 | 118.6 | | 174.2 | 414.7, fresh | 856.9, fresh |
-| git-wt 0.30.0 | 34.9 | 48.2 | 36.9 | 134.1 | 36.2, stale | 287.4, stale |
-| gwq 0.1.2 | 8.2 | 22.3 | | 106.8 | | 231.9, stale |
-| wtp 2.10.3 | 7.7 | 19.0 | 8.2 | 96.9 | 8.4, stale | 228.4, stale |
-| rabi 7.0.0 | 52.2 | 64.7 | | 143.1 | 54.0, stale | 1072.6, stale |
-| workz 0.11.0 | 8.1 | 17.3 | 8.3 | 77.2 | 8.8, stale | 228.2, stale |
+| waku | 6.2 | 10.5 | 6.2 | 45.7 | 7.2, fresh after fetch | 97.3, fresh after fetch |
+| waku `--fetch` | | | | | 314.6, fresh | 1706.6, fresh |
+| worktrunk 0.83.0 | 16.2 | 42.9 | | 80.4 | 18.1, stale | 232.9, stale |
+| gtr 3.1.0 | 238.7 | 263.2 | | 321.0 | 552.0, fresh | 1830.6, fresh |
+| git-wt 0.30.0 | 34.5 | 48.8 | 35.4 | 131.1 | 36.0, stale | 276.4, stale |
+| gwq 0.1.2 | 7.8 | 24.0 | | 105.1 | | 219.7, stale |
+| wtp 2.11.1 | 7.7 | 19.5 | 8.0 | 96.0 | 8.4, stale | 228.1, stale |
+| rabi 8.2.3 | 49.9 | 62.2 | | 143.3 | 52.4, stale | 1080.0, stale |
+| workz 0.11.0 | 8.0 | 17.7 | 7.8 | 76.4 | 8.7, stale | 222.5, stale |
 
 - `plain`: a 22-file repository, no file sharing.
 - `copy`: 640 small gitignored files in `node_modules/`, copied.
